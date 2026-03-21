@@ -58,6 +58,31 @@ def run_self_test():
         state2.add_to_cascade(card_ace, 0)
         successors = FreeCell.get_successors(state2)
         print(f"Generated {len(successors)} successor states from Ace of Clubs")
+
+        # Numbered deal reproducibility
+        deal_a = FreeCell.create_initial_state(deal_number=2026)
+        deal_b = FreeCell.create_initial_state(deal_number=2026)
+        if deal_a != deal_b:
+            raise AssertionError("Numbered deal generation is not deterministic")
+        print("Numbered deal generation is deterministic")
+
+        # Supermove sequence support
+        super_state = GameState(
+            cascades=[
+                [Card(13, 'S'), Card(12, 'H'), Card(11, 'C')],
+                [Card(13, 'C')],
+                [],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ]
+        )
+        can_supermove = FreeCell.can_move_sequence_cascade_to_cascade(super_state, 0, 1, 2)
+        if not can_supermove:
+            raise AssertionError("Expected legal supermove was rejected")
+        print("Supermove validation works for sequence cascade moves")
         print()
         
         print("=" * 60)

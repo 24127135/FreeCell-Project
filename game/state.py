@@ -151,6 +151,43 @@ class GameState:
         if len(cascade) == 0:
             raise ValueError(f"Cannot remove from empty cascade {cascade_index}")
         return cascade.pop()
+
+    def remove_sequence_from_cascade(self, cascade_index, count):
+        """
+        Remove and return a sequence of top cards from a cascade.
+
+        Args:
+            cascade_index (int): Index of the cascade
+            count (int): Number of cards to remove from top
+
+        Returns:
+            list: Removed cards in original order (bottom to top)
+
+        Raises:
+            ValueError: If count is invalid or cascade has too few cards
+        """
+        if count <= 0:
+            raise ValueError(f"Count must be positive, got {count}")
+
+        cascade = self.cascades[cascade_index]
+        if len(cascade) < count:
+            raise ValueError(
+                f"Cannot remove {count} card(s) from cascade {cascade_index} with {len(cascade)} card(s)"
+            )
+
+        removed = cascade[-count:]
+        del cascade[-count:]
+        return removed
+
+    def add_sequence_to_cascade(self, cards, cascade_index):
+        """
+        Add a sequence of cards to the top of a cascade.
+
+        Args:
+            cards (list): Cards to add in order (bottom to top)
+            cascade_index (int): Index of destination cascade
+        """
+        self.cascades[cascade_index].extend(cards)
     
     def remove_card_from_free_cell(self, free_cell_index):
         """

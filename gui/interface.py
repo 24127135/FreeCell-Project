@@ -1,10 +1,9 @@
-"""Tkinter GUI for playable single-card-move FreeCell."""
+"""Tkinter GUI for playable FreeCell with supermove rules and numbered deals."""
 
-import random
 import tkinter as tk
 from tkinter import messagebox
 
-from game import Card, FreeCell, GameState
+from game import Card, FreeCell
 
 
 class FreeCell_GUI:
@@ -22,11 +21,12 @@ class FreeCell_GUI:
 
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("FreeCell Solver - GUI")
+        self.root.title("FreeCell - GUI")
         self.root.configure(bg="#1f5b3a")
 
         self.state = None
         self.initial_state = None
+        self.current_deal_number = None
         self.selection = None  # ("cascade"|"free", index)
         self.history = []
         self.win_announced = False
@@ -35,7 +35,10 @@ class FreeCell_GUI:
             "active": False,
             "source_kind": None,
             "source_idx": None,
+            "source_pos": None,
             "card": None,
+            "cards": [],
+            "count": 1,
             "tag": None,
             "offset_x": 0,
             "offset_y": 0,
@@ -57,7 +60,14 @@ class FreeCell_GUI:
         toolbar = tk.Frame(self.root, bg="#1f5b3a")
         toolbar.pack(fill=tk.X, padx=10, pady=(10, 6))
 
-        tk.Button(toolbar, text="New Game", command=self.new_game, width=12).pack(side=tk.LEFT, padx=4)
+        tk.Button(toolbar, text="New Random", command=self.new_game, width=12).pack(side=tk.LEFT, padx=4)
+        tk.Label(toolbar, text="Deal #", bg="#1f5b3a", fg="white", font=("Segoe UI", 9, "bold")).pack(
+            side=tk.LEFT,
+            padx=(12, 4),
+        )
+        self.deal_entry = tk.Entry(toolbar, width=10)
+        self.deal_entry.pack(side=tk.LEFT, padx=4)
+        tk.Button(toolbar, text="Load Deal", command=self.new_game_from_entry, width=12).pack(side=tk.LEFT, padx=4)
         tk.Button(toolbar, text="Restart Deal", command=self.restart_deal, width=12).pack(side=tk.LEFT, padx=4)
         tk.Button(toolbar, text="Undo", command=self.undo_move, width=10).pack(side=tk.LEFT, padx=4)
         tk.Button(toolbar, text="Hint", command=self.show_hint, width=10).pack(side=tk.LEFT, padx=4)
@@ -90,34 +100,36 @@ class FreeCell_GUI:
         self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
 
-    def _create_shuffled_deck(self):
-        deck = [Card(rank, suit) for suit in ["H", "D", "C", "S"] for rank in range(1, 14)]
-        random.shuffle(deck)
-        return deck
-
-    def _deal_new_state(self):
-        deck = self._create_shuffled_deck()
-        cascades = [[] for _ in range(8)]
-        idx = 0
-        for pile in range(8):
-            count = 7 if pile < 4 else 6
-            for _ in range(count):
-                cascades[pile].append(deck[idx])
-                idx += 1
-        return GameState(cascades=cascades)
-
-    def new_game(self):
-        self.state = self._deal_new_state()
+    def new_game(self, deal_number=None):
+        self.current_deal_number = deal_number
+        self.state = FreeCell.create_initial_state(deal_number=deal_number)
         self.initial_state = self.state.copy()
         self.selection = None
         self.history = []
         self.win_announced = False
         moved = self._auto_move_to_foundation_internal()
+        deal_label = "random" if deal_number is None else str(deal_number)
         if moved:
-            self.status_var.set(f"New game started. Auto-moved {moved} card(s) to foundation.")
+            self.status_var.set(
+                f"New game started (deal {deal_label}). Auto-moved {moved} card(s) to foundation."
+            )
         else:
-            self.status_var.set("New game started. Select a top card to move.")
+            self.status_var.set(f"New game started (deal {deal_label}). Select a top card to move.")
         self.render()
+
+    def new_game_from_entry(self):
+        raw = self.deal_entry.get().strip()
+        if not raw:
+            self.status_var.set("Enter a deal number to load a numbered deal.")
+            return
+
+        try:
+            deal_number = int(raw)
+        except ValueError:
+            self.status_var.set("Deal number must be an integer.")
+            return
+
+        self.new_game(deal_number=deal_number)
 
     def restart_deal(self):
         if self.initial_state is None:
@@ -127,10 +139,11 @@ class FreeCell_GUI:
         self.history = []
         self.win_announced = False
         moved = self._auto_move_to_foundation_internal()
+        deal_label = "random" if self.current_deal_number is None else str(self.current_deal_number)
         if moved:
-            self.status_var.set(f"Deal restarted. Auto-moved {moved} card(s) to foundation.")
+            self.status_var.set(f"Deal {deal_label} restarted. Auto-moved {moved} card(s) to foundation.")
         else:
-            self.status_var.set("Deal restarted.")
+            self.status_var.set(f"Deal {deal_label} restarted.")
         self.render()
 
     def undo_move(self):
@@ -293,7 +306,12 @@ class FreeCell_GUI:
 
             cascade = self.state.cascades[i]
             for j, card in enumerate(cascade):
-                if dragging_cascade and self.drag["source_idx"] == i and j == len(cascade) - 1:
+                if (
+                    dragging_cascade
+                    and self.drag["source_idx"] == i
+                    and self.drag["source_pos"] is not None
+                    and j >= self.drag["source_pos"]
+                ):
                     continue
                 y = base_y + j * self.STACK_GAP
                 self._draw_card(x, y, card, tags=(tag, f"card_cascade_{i}_{j}"))
@@ -318,17 +336,29 @@ class FreeCell_GUI:
             if self._rect_contains(x, y, sx, sy, self.CARD_WIDTH, self.CARD_HEIGHT):
                 card = self.state.get_free_cell(i)
                 if card is not None:
-                    return "free", i, card, sx, sy
+                    return "free", i, 0, [card], sx, sy
                 return None
 
-        # Top card of each cascade only
+        # Any card in a valid top sequence in each cascade.
         for i in range(8):
-            card = self.state.get_top_card(i)
-            if card is None:
+            cascade = self.state.cascades[i]
+            if not cascade:
                 continue
-            sx, sy = self._source_card_position("cascade", i)
-            if self._rect_contains(x, y, sx, sy, self.CARD_WIDTH, self.CARD_HEIGHT):
-                return "cascade", i, card, sx, sy
+            sx = self._slot_x(i)
+            base_y = self._cascade_row_y()
+            top_y = base_y + (len(cascade) - 1) * self.STACK_GAP
+            if not self._rect_contains(x, y, sx, base_y, self.CARD_WIDTH, (top_y - base_y) + self.CARD_HEIGHT):
+                continue
+
+            if y >= top_y:
+                card_pos = len(cascade) - 1
+            else:
+                card_pos = int((y - base_y) // self.STACK_GAP)
+                card_pos = max(0, min(card_pos, len(cascade) - 1))
+
+            cards = cascade[card_pos:]
+            if FreeCell.is_valid_tableau_sequence(cards):
+                return "cascade", i, card_pos, cards, sx, base_y + card_pos * self.STACK_GAP
 
         return None
 
@@ -356,11 +386,16 @@ class FreeCell_GUI:
 
         return None
 
-    def _start_drag(self, source_kind, source_idx, card, sx, sy, mouse_x, mouse_y):
+    def _start_drag(self, source_kind, source_idx, source_pos, cards, sx, sy, mouse_x, mouse_y):
+        count = len(cards)
+        card = cards[0]
         self.drag["active"] = True
         self.drag["source_kind"] = source_kind
         self.drag["source_idx"] = source_idx
+        self.drag["source_pos"] = source_pos
         self.drag["card"] = card
+        self.drag["cards"] = list(cards)
+        self.drag["count"] = count
         self.drag["tag"] = "drag_card"
         self.drag["offset_x"] = mouse_x - sx
         self.drag["offset_y"] = mouse_y - sy
@@ -378,7 +413,17 @@ class FreeCell_GUI:
 
         # Redraw board with drag state so source card is temporarily hidden.
         self.render()
-        self._draw_card(hold_x, hold_y, card, tags=(self.drag["tag"],), lifted=True)
+        if count == 1:
+            self._draw_card(hold_x, hold_y, card, tags=(self.drag["tag"],), lifted=True)
+        else:
+            for j, moving_card in enumerate(cards):
+                self._draw_card(
+                    hold_x,
+                    hold_y + j * self.STACK_GAP,
+                    moving_card,
+                    tags=(self.drag["tag"],),
+                    lifted=True,
+                )
         self.canvas.tag_raise(self.drag["tag"])
         self._schedule_drag_follow()
 
@@ -410,7 +455,10 @@ class FreeCell_GUI:
                 "active": False,
                 "source_kind": None,
                 "source_idx": None,
+                "source_pos": None,
                 "card": None,
+                "cards": [],
+                "count": 1,
                 "tag": None,
                 "offset_x": 0,
                 "offset_y": 0,
@@ -460,17 +508,26 @@ class FreeCell_GUI:
         src_kind = self.drag["source_kind"]
         src_idx = self.drag["source_idx"]
         card = self.drag["card"]
+        move_count = self.drag["count"]
 
         next_state = None
         msg = None
 
         if src_kind == "cascade" and target_kind == "cascade":
-            next_state = FreeCell.move_cascade_to_cascade(self.state, src_idx, target_val)
-            msg = f"Moved to Cascade {target_val + 1}."
+            if move_count > 1:
+                next_state = FreeCell.move_sequence_cascade_to_cascade(self.state, src_idx, target_val, move_count)
+                msg = f"Supermoved {move_count} cards to Cascade {target_val + 1}."
+            else:
+                next_state = FreeCell.move_cascade_to_cascade(self.state, src_idx, target_val)
+                msg = f"Moved to Cascade {target_val + 1}."
         elif src_kind == "cascade" and target_kind == "free":
+            if move_count != 1:
+                raise ValueError("Only one card can move to a free cell")
             next_state = FreeCell.move_cascade_to_freecell(self.state, src_idx, target_val)
             msg = f"Moved to Free Cell {target_val + 1}."
         elif src_kind == "cascade" and target_kind == "foundation":
+            if move_count != 1:
+                raise ValueError("Only one card can move to foundation")
             if card.suit != target_val:
                 raise ValueError("Invalid foundation target")
             next_state = FreeCell.move_cascade_to_foundation(self.state, src_idx)
@@ -488,14 +545,16 @@ class FreeCell_GUI:
 
         return next_state, msg
 
-    def _target_card_position_after_move(self, next_state, target_kind, target_val):
+    def _target_card_position_after_move(self, next_state, target_kind, target_val, moved_count=1):
         if target_kind == "free":
             return self._slot_x(target_val), self._top_row_y()
         if target_kind == "foundation":
             suit_to_slot = {"H": 4, "D": 5, "C": 6, "S": 7}
             return self._slot_x(suit_to_slot[target_val]), self._top_row_y()
-        # cascade
-        return self._source_card_position("cascade", target_val, state=next_state)
+        # cascade: align dragged sequence base with destination base position.
+        x = self._slot_x(target_val)
+        y = self._cascade_row_y() + (len(next_state.cascades[target_val]) - moved_count) * self.STACK_GAP
+        return x, y
 
     def _on_canvas_press(self, event):
         if self.drag["active"]:
@@ -507,10 +566,13 @@ class FreeCell_GUI:
             self.render()
             return
 
-        source_kind, source_idx, card, sx, sy = source
+        source_kind, source_idx, source_pos, cards, sx, sy = source
         self.selection = None
-        self._start_drag(source_kind, source_idx, card, sx, sy, event.x, event.y)
-        self.status_var.set(f"Dragging {card}...")
+        self._start_drag(source_kind, source_idx, source_pos, cards, sx, sy, event.x, event.y)
+        if len(cards) > 1:
+            self.status_var.set(f"Dragging sequence ({len(cards)} cards)...")
+        else:
+            self.status_var.set(f"Dragging {cards[0]}...")
 
     def _on_canvas_drag(self, event):
         if not self.drag["active"]:
@@ -559,7 +621,12 @@ class FreeCell_GUI:
 
         try:
             next_state, msg = self._apply_drop_move(target_kind, target_val)
-            tx, ty = self._target_card_position_after_move(next_state, target_kind, target_val)
+            tx, ty = self._target_card_position_after_move(
+                next_state,
+                target_kind,
+                target_val,
+                moved_count=self.drag["count"],
+            )
 
             def done_ok():
                 self._clear_drag()
