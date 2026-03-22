@@ -2,7 +2,7 @@
 
 import tkinter as tk
 from tkinter import messagebox
-
+import threading
 from game import Card, FreeCell
 
 
@@ -71,7 +71,8 @@ class FreeCell_GUI:
         tk.Button(toolbar, text="Restart Deal", command=self.restart_deal, width=12).pack(side=tk.LEFT, padx=4)
         tk.Button(toolbar, text="Undo", command=self.undo_move, width=10).pack(side=tk.LEFT, padx=4)
         tk.Button(toolbar, text="Hint", command=self.show_hint, width=10).pack(side=tk.LEFT, padx=4)
-
+        tk.Button(toolbar, text="Solve A*", command=self.solve_with_astar, bg="#4CAF50", fg="white", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(10, 4))
+        tk.Button(toolbar, text="Solve UCS", command=self.solve_with_ucs, bg="#2196F3", fg="white", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=4)
         self.status_var = tk.StringVar(value="Welcome to FreeCell")
         self.status_label = tk.Label(
             self.root,
@@ -792,3 +793,82 @@ class FreeCell_GUI:
 
     def run(self):
         self.root.mainloop()
+
+    def solve_with_astar(self):
+        if getattr(self, "is_solving", False):
+            return
+
+        self.is_solving = True
+        self.status_var.set("AI đang suy nghĩ...")
+        self.root.update()
+
+        def worker_thread():
+            from solvers.astar_solver import AStarSolver
+            solver = AStarSolver()
+            path, metrics = solver.solve(self.state)
+            self.root.after(0, lambda: self._on_solve_complete(path, metrics))
+
+        threading.Thread(target=worker_thread, daemon=True).start()
+
+    def _on_astar_complete(self, path, metrics):
+        self.is_solving = False
+
+        if path:
+            self.status_var.set(
+                f"Giải trong {metrics['solution_length']} bước ({metrics['time_taken']:.2f}s).")
+            self.root.after(500, lambda: self.animate_solution(path))
+        else:
+            self.status_var.set("AI không tìm thấy đường giải!")
+
+    def solve_with_ucs(self):
+        if getattr(self, "is_solving", False): return
+        self.is_solving = True
+        self.status_var.set("UCS đang chạy... ")
+        self.root.update()
+
+        import threading
+        def worker():
+            from solvers.ucs_solver import UCSSolver
+            solver = UCSSolver()
+            path, metrics = solver.solve(self.state)
+            self.root.after(0, lambda: self._on_ucs_complete(path, metrics))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_ucs_complete(self, path, metrics):
+        self.is_solving = False
+        if path:
+            self.status_var.set(f"UCS chạy thành công! {metrics['solution_length']} bước ({metrics['time_taken']:.2f}s).")
+            self.animate_solution(path)
+        else:
+            self.status_var.set("UCS không tìm thấy đường giải!")
+    def animate_solution(self, path):
+
+        if not path:
+            from tkinter import messagebox
+            self.status_var.set("Hoàn thành! AI đã giải xong ván bài.")
+            messagebox.showinfo("Hoàn thành", "AI đã giải xong ván bài!")
+            return
+
+        move = path.pop(0)
+
+        from game.freecell import FreeCell
+
+        if move.move_type == 'CASCADE_TO_CASCADE':
+            self.state = FreeCell.move_cascade_to_cascade(self.state, move.from_location, move.to_location)
+        elif move.move_type == 'SEQUENCE_CASCADE_TO_CASCADE':
+            self.state = FreeCell.move_sequence_cascade_to_cascade(self.state, move.from_location, move.to_location,
+                                                                   move.count)
+        elif move.move_type == 'CASCADE_TO_FREECELL':
+            self.state = FreeCell.move_cascade_to_freecell(self.state, move.from_location, move.to_location)
+        elif move.move_type == 'FREECELL_TO_CASCADE':
+            self.state = FreeCell.move_freecell_to_cascade(self.state, move.from_location, move.to_location)
+        elif move.move_type == 'CASCADE_TO_FOUNDATION':
+            self.state = FreeCell.move_cascade_to_foundation(self.state, move.from_location)
+        elif move.move_type == 'FREECELL_TO_FOUNDATION':
+            self.state = FreeCell.move_freecell_to_foundation(self.state, move.from_location)
+
+        self.status_var.set(f"AI đang đi: {str(move)}")
+        self.render()
+        self.root.update()
+        self.root.after(300, lambda: self.animate_solution(path))
