@@ -72,6 +72,15 @@ class FreeCell_GUI:
         tk.Button(toolbar, text="Undo", command=self.undo_move, width=10).pack(side=tk.LEFT, padx=4)
         tk.Button(toolbar, text="Hint", command=self.show_hint, width=10).pack(side=tk.LEFT, padx=4)
 
+        self.stack_limit_var = tk.StringVar(value="Max stack: -")
+        tk.Label(
+            toolbar,
+            textvariable=self.stack_limit_var,
+            bg="#1f5b3a",
+            fg="#e6f4ec",
+            font=("Segoe UI", 9, "bold"),
+        ).pack(side=tk.RIGHT, padx=(8, 4))
+
         self.status_var = tk.StringVar(value="Welcome to FreeCell")
         self.status_label = tk.Label(
             self.root,
@@ -169,6 +178,7 @@ class FreeCell_GUI:
 
     def render(self):
         self.canvas.delete("all")
+        self._update_stack_limit_status()
         self._draw_top_area()
         self._draw_cascades()
         self._draw_selection_marker()
@@ -556,6 +566,40 @@ class FreeCell_GUI:
         y = self._cascade_row_y() + (len(next_state.cascades[target_val]) - moved_count) * self.STACK_GAP
         return x, y
 
+    def _update_stack_limit_status(self):
+        empty_free_cells = self.state.get_empty_free_cells_count()
+        empty_cascades = self.state.get_empty_cascades_count()
+
+        # Board-level supermove capacity (independent of specific source cascade).
+        c_to_non_empty = (empty_free_cells + 1) * (2 ** empty_cascades)
+
+        if empty_cascades > 0:
+            c_to_empty = c_to_non_empty // 2
+            self.stack_limit_var.set(
+                f"Max stack: {c_to_non_empty} (to non-empty), {c_to_empty} (to empty)"
+            )
+            return
+
+        self.stack_limit_var.set(f"Max stack: {c_to_non_empty} (to non-empty), n/a (to empty)")
+
+    def _build_invalid_drop_message(self, target_kind, target_val):
+        src_kind = self.drag["source_kind"]
+        src_idx = self.drag["source_idx"]
+        move_count = self.drag["count"]
+
+        if src_kind == "cascade" and target_kind == "cascade":
+            max_cards = FreeCell.get_max_movable_cards(self.state, src_idx, target_val)
+            movable_sequence = FreeCell.get_movable_sequence_length(self.state, src_idx)
+            allowed = min(max_cards, movable_sequence)
+
+            if move_count > allowed:
+                return (
+                    f"Invalid move: {move_count} card(s) selected, but max allowed to "
+                    f"Cascade {target_val + 1} is {allowed}."
+                )
+
+        return "Invalid move."
+
     def _on_canvas_press(self, event):
         if self.drag["active"]:
             return
@@ -635,10 +679,11 @@ class FreeCell_GUI:
             self._animate_drag_to(tx, ty, done_ok)
         except ValueError:
             ox, oy = self.drag["origin_x"], self.drag["origin_y"]
+            invalid_msg = self._build_invalid_drop_message(target_kind, target_val)
 
             def done_fail():
                 self._clear_drag()
-                self.status_var.set("Invalid move.")
+                self.status_var.set(invalid_msg)
                 self.render()
 
             self._animate_drag_to(ox, oy, done_fail)

@@ -140,10 +140,17 @@ class FreeCell:
     @staticmethod
     def get_max_movable_cards(state, from_cascade, to_cascade):
         """
-        Compute maximum transferable sequence size for a cascade move.
+                Compute maximum transferable sequence size for a cascade move.
 
-        Uses FreeCell supermove capacity rule based on available empty
-        free cells and auxiliary empty cascades.
+                Rule-aligned with FreeCell supermoves as commonly documented:
+                - To a non-empty cascade:
+                    C = 2^M * (N + 1)
+                - To an empty cascade:
+                    C / 2
+
+                Where:
+                - N is the number of empty free cells
+                - M is the number of empty cascades (excluding source cascade)
 
         Args:
             state (GameState): Current game state
@@ -155,14 +162,23 @@ class FreeCell:
         """
         empty_free_cells = state.get_empty_free_cells_count()
 
-        empty_aux_cascades = 0
+        empty_cascades_excluding_source = 0
         for idx, cascade in enumerate(state.cascades):
-            if idx == from_cascade or idx == to_cascade:
+            if idx == from_cascade:
                 continue
             if len(cascade) == 0:
-                empty_aux_cascades += 1
+                empty_cascades_excluding_source += 1
 
-        return (empty_free_cells + 1) * (2 ** empty_aux_cascades)
+        to_is_empty = len(state.get_cascade(to_cascade)) == 0
+
+        # C = 2^M * (N + 1), with M as empty cascades excluding source.
+        c_to_non_empty = (empty_free_cells + 1) * (2 ** empty_cascades_excluding_source)
+
+        if to_is_empty:
+            # Moving to an empty cascade reduces capacity to C/2.
+            return max(1, c_to_non_empty // 2)
+
+        return c_to_non_empty
     
     @staticmethod
     def can_move_cascade_to_cascade(state, from_cascade, to_cascade):

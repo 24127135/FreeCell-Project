@@ -19,11 +19,11 @@ def run_self_test():
     print("All modules imported successfully.")
     print()
     print("Core Components:")
-    print("  ✓ Game module: Card, GameState, FreeCell")
-    print("  ✓ Solvers: BFS, DFS, UCS, A*")
-    print("  ✓ GUI framework")
-    print("  ✓ Experiment analyzer")
-    print("  ✓ Utilities: Heuristics")
+    print("  - Game module: Card, GameState, FreeCell")
+    print("  - Solvers: BFS, DFS, UCS, A*")
+    print("  - GUI framework")
+    print("  - Experiment analyzer")
+    print("  - Utilities: Heuristics")
     print()
     print("=" * 60)
     print()
@@ -83,6 +83,29 @@ def run_self_test():
         if not can_supermove:
             raise AssertionError("Expected legal supermove was rejected")
         print("Supermove validation works for sequence cascade moves")
+
+        # Supermove capacity formula checks (Wikipedia-aligned)
+        # C = 2^M * (N + 1) to non-empty cascade, and C/2 to empty cascade.
+        formula_state = GameState(
+            cascades=[
+                [Card(8, 'S'), Card(7, 'H'), Card(6, 'C')],  # source
+                [Card(9, 'D')],  # non-empty destination
+                [],  # empty cascade (aux)
+                [],  # empty cascade (aux)
+                [Card(5, 'C')],
+                [Card(4, 'D')],
+                [Card(3, 'C')],
+                [Card(2, 'D')],
+            ],
+            free_cells=[None, None, Card(10, 'H'), Card(10, 'S')],
+        )
+        non_empty_cap = FreeCell.get_max_movable_cards(formula_state, 0, 1)
+        empty_cap = FreeCell.get_max_movable_cards(formula_state, 0, 2)
+        if non_empty_cap != 12:
+            raise AssertionError(f"Expected non-empty destination capacity 12, got {non_empty_cap}")
+        if empty_cap != 6:
+            raise AssertionError(f"Expected empty destination capacity 6, got {empty_cap}")
+        print("Supermove capacity formula matches FreeCell rules")
         print()
         
         print("=" * 60)

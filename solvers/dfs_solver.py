@@ -1,4 +1,4 @@
-"""Depth-First Search solver placeholder."""
+"""Depth-First Search solver stub for FreeCell."""
 
 
 class DFSSolver:
@@ -18,5 +18,5 @@ class DFSSolver:
         Returns:
             tuple: (solution_path, metrics) or (None, metrics) if unsolvable
         """
-        # Placeholder - to be implemented
+        # Implementation pending.
         raise NotImplementedError("DFS solver not yet implemented")

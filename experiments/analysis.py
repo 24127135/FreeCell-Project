@@ -1,4 +1,4 @@
-"""Experiment analysis module placeholder."""
+"""Performance analysis utilities for FreeCell solver experiments."""
 
 
 class ExperimentAnalyzer:
@@ -10,5 +10,5 @@ class ExperimentAnalyzer:
     
     def run_experiments(self):
         """Run performance experiments."""
-        # Placeholder - to be implemented
+        # Implementation pending.
         raise NotImplementedError("Experiment analyzer not yet implemented")

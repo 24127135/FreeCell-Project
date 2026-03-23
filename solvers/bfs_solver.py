@@ -1,4 +1,4 @@
-"""Breadth-First Search solver placeholder."""
+"""Breadth-First Search solver stub for FreeCell."""
 
 
 class BFSSolver:
@@ -18,5 +18,5 @@ class BFSSolver:
         Returns:
             tuple: (solution_path, metrics) or (None, metrics) if unsolvable
         """
-        # Placeholder - to be implemented
+        # Implementation pending.
         raise NotImplementedError("BFS solver not yet implemented")

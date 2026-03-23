@@ -1,4 +1,4 @@
-"""Uniform-Cost Search solver placeholder."""
+"""Uniform-Cost Search solver stub for FreeCell."""
 
 
 class UCSSolver:
@@ -18,5 +18,5 @@ class UCSSolver:
         Returns:
             tuple: (solution_path, metrics) or (None, metrics) if unsolvable
         """
-        # Placeholder - to be implemented
+        # Implementation pending.
         raise NotImplementedError("UCS solver not yet implemented")

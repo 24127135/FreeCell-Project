@@ -1,7 +1,7 @@
-"""GUI utilities placeholder."""
+"""Heuristic function utilities for FreeCell solvers."""
 
 
 def create_heuristic_function():
     """Create and return a heuristic function for A* search."""
-    # Placeholder - to be implemented
+    # Implementation pending.
     pass

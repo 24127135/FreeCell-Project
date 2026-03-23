@@ -1,4 +1,4 @@
-"""A* Search solver placeholder."""
+"""A* Search solver stub for FreeCell."""
 
 
 class AStarSolver:
@@ -18,5 +18,5 @@ class AStarSolver:
         Returns:
             tuple: (solution_path, metrics) or (None, metrics) if unsolvable
         """
-        # Placeholder - to be implemented
+        # Implementation pending.
         raise NotImplementedError("A* solver not yet implemented")
