@@ -479,28 +479,46 @@ class FreeCell:
         return new_state
     
     @staticmethod
-    def get_successors(state):
+    def get_successors(state, foundation_only=False):
         """
         Generate all valid successor states from current state.
         This is the key function used by search algorithms.
         
         Args:
             state (GameState): Current game state
+            foundation_only (bool): If True, return only foundation moves when
+                at least one exists. If none exist, return full successors.
             
         Returns:
             list: List of (new_state, move) tuples
         """
         successors = []
-        
-        # Try moves from cascades
+        foundation_successors = []
+
+        # Generate foundation moves first so solvers can optionally short-circuit.
         for cascade_idx in range(8):
-            # Cascade to foundation (priority - frees up space)
             if FreeCell.can_move_cascade_to_foundation(state, cascade_idx):
                 new_state = FreeCell.move_cascade_to_foundation(state, cascade_idx)
                 card = state.get_top_card(cascade_idx)
                 move = Move('CASCADE_TO_FOUNDATION', cascade_idx, None, card)
-                successors.append((new_state, move))
-            
+                foundation_successors.append((new_state, move))
+
+        for free_cell_idx in range(4):
+            card = state.get_free_cell(free_cell_idx)
+            if card is None:
+                continue
+            if FreeCell.can_move_freecell_to_foundation(state, free_cell_idx):
+                new_state = FreeCell.move_freecell_to_foundation(state, free_cell_idx)
+                move = Move('FREECELL_TO_FOUNDATION', free_cell_idx, None, card)
+                foundation_successors.append((new_state, move))
+
+        if foundation_only and foundation_successors:
+            return foundation_successors
+
+        successors.extend(foundation_successors)
+        
+        # Try moves from cascades
+        for cascade_idx in range(8):
             # Cascade to free cell
             if FreeCell.can_move_cascade_to_freecell(state, cascade_idx):
                 for free_cell_idx in range(4):
@@ -546,13 +564,7 @@ class FreeCell:
             card = state.get_free_cell(free_cell_idx)
             if card is None:
                 continue
-            
-            # Free cell to foundation (priority)
-            if FreeCell.can_move_freecell_to_foundation(state, free_cell_idx):
-                new_state = FreeCell.move_freecell_to_foundation(state, free_cell_idx)
-                move = Move('FREECELL_TO_FOUNDATION', free_cell_idx, None, card)
-                successors.append((new_state, move))
-            
+
             # Free cell to cascade
             for cascade_idx in range(8):
                 if FreeCell.can_move_freecell_to_cascade(state, free_cell_idx, cascade_idx):

@@ -804,9 +804,9 @@ class FreeCell_GUI:
 
         def worker_thread():
             from solvers.astar_solver import AStarSolver
-            solver = AStarSolver()
+            solver = AStarSolver(debug=True, debug_every=500)
             path, metrics = solver.solve(self.state)
-            self.root.after(0, lambda: self._on_solve_complete(path, metrics))
+            self.root.after(0, lambda: self._on_astar_complete(path, metrics))
 
         threading.Thread(target=worker_thread, daemon=True).start()
 
@@ -829,7 +829,7 @@ class FreeCell_GUI:
         import threading
         def worker():
             from solvers.ucs_solver import UCSSolver
-            solver = UCSSolver()
+            solver = UCSSolver(debug=True, debug_every=1000)
             path, metrics = solver.solve(self.state)
             self.root.after(0, lambda: self._on_ucs_complete(path, metrics))
 

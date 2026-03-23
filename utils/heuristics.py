@@ -17,21 +17,19 @@ def calculate_h_da(state):
     h0 = 52 - sum(state.foundations.values())
 
     # 2. me: Đếm số lượng chu trình bế tắc 1-chất (1-suit deadlock cycles)
+    # Tối ưu O(n) theo mỗi cascade: duyệt từ trên xuống và lưu rank lớn nhất đã thấy theo suit.
     me = 0
     for cascade in state.cascades:
-        # i duyệt các lá bài bị vùi bên dưới (từ index 0)
-        for i in range(len(cascade)):
-            card_buried = cascade[i]
+        max_rank_above = {'H': 0, 'D': 0, 'C': 0, 'S': 0}
 
-            # j duyệt các lá bài nằm đè lên trên card_buried
-            for j in range(i + 1, len(cascade)):
-                card_blocking = cascade[j]
+        # Duyệt từ top -> bottom để biết thông tin các lá ở phía trên.
+        for card in reversed(cascade):
+            suit = card.suit
+            if max_rank_above[suit] > card.rank:
+                me += 1
 
-                # Phát hiện bế tắc: Cùng chất VÀ lá cản bên ngoài có rank lớn hơn lá bên trong
-                if (card_blocking.suit == card_buried.suit) and (card_blocking.rank > card_buried.rank):
-                    me += 1
-                    # Break để đảm bảo tính Consistent: một lá bài bị vùi chỉ bị phạt 1 lần
-                    break
+            if card.rank > max_rank_above[suit]:
+                max_rank_above[suit] = card.rank
 
     return h0 + me
 
