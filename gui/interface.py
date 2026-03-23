@@ -1,7 +1,7 @@
 """Tkinter GUI for playable FreeCell with supermove rules and numbered deals."""
 
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 import threading
 from game import Card, FreeCell
 
@@ -30,6 +30,8 @@ class FreeCell_GUI:
         self.selection = None  # ("cascade"|"free", index)
         self.history = []
         self.win_announced = False
+        self.last_solution_moves = []
+        self.last_solver_name = None
 
         self.drag = {
             "active": False,
@@ -70,7 +72,6 @@ class FreeCell_GUI:
         tk.Button(toolbar, text="Load Deal", command=self.new_game_from_entry, width=12).pack(side=tk.LEFT, padx=4)
         tk.Button(toolbar, text="Restart Deal", command=self.restart_deal, width=12).pack(side=tk.LEFT, padx=4)
         tk.Button(toolbar, text="Undo", command=self.undo_move, width=10).pack(side=tk.LEFT, padx=4)
-        tk.Button(toolbar, text="Hint", command=self.show_hint, width=10).pack(side=tk.LEFT, padx=4)
 
         self.stack_limit_var = tk.StringVar(value="Max stack: -")
         tk.Label(
@@ -80,8 +81,7 @@ class FreeCell_GUI:
             fg="#e6f4ec",
             font=("Segoe UI", 9, "bold"),
         ).pack(side=tk.RIGHT, padx=(8, 4))
-        tk.Button(toolbar, text="Solve A*", command=self.solve_with_astar, bg="#4CAF50", fg="white", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(10, 4))
-        tk.Button(toolbar, text="Solve UCS", command=self.solve_with_ucs, bg="#2196F3", fg="white", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=4)
+
         self.status_var = tk.StringVar(value="Welcome to FreeCell")
         self.status_label = tk.Label(
             self.root,
@@ -96,14 +96,43 @@ class FreeCell_GUI:
         width = self.LEFT_MARGIN * 2 + self.CARD_WIDTH * 8 + self.SLOT_GAP * 7
         height = self.TOP_MARGIN * 2 + self.CARD_HEIGHT + self.ROW_GAP + self.CARD_HEIGHT + 7 * self.STACK_GAP + 40
 
+        main_area = tk.Frame(self.root, bg="#1f5b3a")
+        main_area.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+
         self.canvas = tk.Canvas(
-            self.root,
+            main_area,
             width=width,
             height=height,
             bg="#0f4a2b",
             highlightthickness=0,
         )
-        self.canvas.pack(padx=10, pady=(0, 10))
+        self.canvas.pack(side=tk.LEFT, padx=(0, 10), pady=0)
+
+        # Right-side algorithm panel.
+        algo_panel = tk.Frame(main_area, bg="#174c31", bd=1, relief=tk.FLAT)
+        algo_panel.pack(side=tk.RIGHT, fill=tk.Y)
+
+        tk.Label(
+            algo_panel,
+            text="Algorithms",
+            bg="#174c31",
+            fg="white",
+            font=("Segoe UI", 10, "bold"),
+            anchor="w",
+        ).pack(fill=tk.X, padx=10, pady=(10, 6))
+
+        tk.Button(algo_panel, text="BFS", command=self.solve_with_bfs, width=14).pack(fill=tk.X, padx=10, pady=4)
+        tk.Button(algo_panel, text="DFS", command=self.solve_with_dfs, width=14).pack(fill=tk.X, padx=10, pady=4)
+        tk.Button(algo_panel, text="UCS", command=self.solve_with_ucs, width=14).pack(fill=tk.X, padx=10, pady=4)
+        tk.Button(algo_panel, text="A*", command=self.solve_with_astar, width=14).pack(fill=tk.X, padx=10, pady=4)
+
+        tk.Frame(algo_panel, bg="#174c31").pack(fill=tk.BOTH, expand=True)
+        tk.Button(
+            algo_panel,
+            text="Export Actions (.txt)",
+            command=self.export_actions_txt,
+            width=18,
+        ).pack(fill=tk.X, padx=10, pady=(10, 10))
 
         # Drag interactions for smooth card movement and snap behavior.
         self.canvas.bind("<ButtonPress-1>", self._on_canvas_press)
@@ -839,6 +868,44 @@ class FreeCell_GUI:
     def run(self):
         self.root.mainloop()
 
+    def solve_with_bfs(self):
+        if getattr(self, "is_solving", False):
+            return
+
+        self.is_solving = True
+        self.status_var.set("BFS is running...")
+        self.root.update()
+
+        def worker_thread():
+            try:
+                from solvers.bfs_solver import BFSSolver
+                solver = BFSSolver()
+                path, metrics = solver.solve(self.state)
+                self.root.after(0, lambda: self._on_solver_complete("BFS", path, metrics))
+            except NotImplementedError:
+                self.root.after(0, lambda: self._on_solver_not_implemented("BFS"))
+
+        threading.Thread(target=worker_thread, daemon=True).start()
+
+    def solve_with_dfs(self):
+        if getattr(self, "is_solving", False):
+            return
+
+        self.is_solving = True
+        self.status_var.set("DFS is running...")
+        self.root.update()
+
+        def worker_thread():
+            try:
+                from solvers.dfs_solver import DFSSolver
+                solver = DFSSolver()
+                path, metrics = solver.solve(self.state)
+                self.root.after(0, lambda: self._on_solver_complete("DFS", path, metrics))
+            except NotImplementedError:
+                self.root.after(0, lambda: self._on_solver_not_implemented("DFS"))
+
+        threading.Thread(target=worker_thread, daemon=True).start()
+
     def solve_with_astar(self):
         if getattr(self, "is_solving", False):
             return
@@ -849,21 +916,11 @@ class FreeCell_GUI:
 
         def worker_thread():
             from solvers.astar_solver import AStarSolver
-            solver = AStarSolver(debug=True, debug_every=500)
+            solver = AStarSolver(debug=True, debug_every=1000)
             path, metrics = solver.solve(self.state)
-            self.root.after(0, lambda: self._on_astar_complete(path, metrics))
+            self.root.after(0, lambda: self._on_solver_complete("A*", path, metrics))
 
         threading.Thread(target=worker_thread, daemon=True).start()
-
-    def _on_astar_complete(self, path, metrics):
-        self.is_solving = False
-
-        if path:
-            self.status_var.set(
-                f"Giải trong {metrics['solution_length']} bước ({metrics['time_taken']:.2f}s).")
-            self.root.after(500, lambda: self.animate_solution(path))
-        else:
-            self.status_var.set("AI không tìm thấy đường giải!")
 
     def solve_with_ucs(self):
         if getattr(self, "is_solving", False): return
@@ -871,22 +928,61 @@ class FreeCell_GUI:
         self.status_var.set("UCS đang chạy... ")
         self.root.update()
 
-        import threading
         def worker():
             from solvers.ucs_solver import UCSSolver
             solver = UCSSolver(debug=True, debug_every=1000)
             path, metrics = solver.solve(self.state)
-            self.root.after(0, lambda: self._on_ucs_complete(path, metrics))
+            self.root.after(0, lambda: self._on_solver_complete("UCS", path, metrics))
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_ucs_complete(self, path, metrics):
+    def _on_solver_not_implemented(self, solver_name):
         self.is_solving = False
-        if path:
-            self.status_var.set(f"UCS chạy thành công! {metrics['solution_length']} bước ({metrics['time_taken']:.2f}s).")
-            self.animate_solution(path)
+        self.status_var.set(f"{solver_name} is not implemented yet.")
+
+    def _on_solver_complete(self, solver_name, path, metrics):
+        self.is_solving = False
+        if path is not None:
+            self.last_solution_moves = list(path)
+            self.last_solver_name = solver_name
+            solution_len = metrics.get("solution_length", len(path))
+            elapsed = metrics.get("time_taken", 0.0)
+            self.status_var.set(f"{solver_name} solved in {solution_len} moves ({elapsed:.2f}s).")
+            self.root.after(500, lambda: self.animate_solution(list(path)))
         else:
-            self.status_var.set("UCS không tìm thấy đường giải!")
+            self.last_solution_moves = []
+            self.last_solver_name = solver_name
+            self.status_var.set(f"{solver_name} did not find a solution.")
+
+    def export_actions_txt(self):
+        if not self.last_solution_moves:
+            self.status_var.set("No action list available. Run a solver first.")
+            return
+
+        default_name = f"freecell_actions_{(self.last_solver_name or 'solver').replace('*', 'astar').lower()}.txt"
+        file_path = filedialog.asksaveasfilename(
+            title="Export Action List",
+            defaultextension=".txt",
+            initialfile=default_name,
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+
+        if not file_path:
+            self.status_var.set("Export cancelled.")
+            return
+
+        try:
+            with open(file_path, "w", encoding="utf-8") as handle:
+                handle.write("FreeCell Action List\n")
+                handle.write(f"Solver: {self.last_solver_name or 'Unknown'}\n")
+                handle.write(f"Total actions: {len(self.last_solution_moves)}\n\n")
+                for idx, move in enumerate(self.last_solution_moves, start=1):
+                    handle.write(f"{idx}. {move}\n")
+
+            self.status_var.set(f"Action list exported: {file_path}")
+        except OSError as exc:
+            self.status_var.set(f"Export failed: {exc}")
+
     def animate_solution(self, path):
 
         if not path:

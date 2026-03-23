@@ -7,7 +7,7 @@ import time
 class UCSSolver:
     """UCS solver for FreeCell."""
 
-    def __init__(self, debug=False, debug_every=5000):
+    def __init__(self, debug=False, debug_every=1000):
         self.debug = debug
         self.debug_every = max(1, int(debug_every))
 

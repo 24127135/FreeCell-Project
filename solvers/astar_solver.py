@@ -9,7 +9,7 @@ from utils.heuristics import calculate_h_da
 class AStarSolver:
     """A* solver for FreeCell."""
 
-    def __init__(self, heuristic_func=calculate_h_da, weight=1, debug=False, debug_every=2000):
+    def __init__(self, heuristic_func=calculate_h_da, weight=2, debug=False, debug_every=10000):
         self.heuristic = heuristic_func
         self.weight = weight
         self.debug = debug
