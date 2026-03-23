@@ -50,11 +50,11 @@ class GameState:
             GameState: A deep copy of this state
         """
         return GameState(
-            cascades=deepcopy(self.cascades),
-            free_cells=deepcopy(self.free_cells),
-            foundations=dict(self.foundations)
+            cascades=[list(cascade) for cascade in self.cascades],
+            free_cells=list(self.free_cells),
+            foundations=self.foundations.copy()
         )
-    
+
     def get_cascade(self, index):
         """Get the cascade pile at the given index."""
         if not (0 <= index < 8):
