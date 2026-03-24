@@ -112,6 +112,21 @@ class FreeCell_GUI:
         algo_panel = tk.Frame(main_area, bg="#174c31", bd=1, relief=tk.FLAT)
         algo_panel.pack(side=tk.RIGHT, fill=tk.Y)
 
+        self.foundation_priority_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            algo_panel,
+            text="Foundation priority",
+            variable=self.foundation_priority_var,
+            onvalue=True,
+            offvalue=False,
+            bg="#174c31",
+            fg="white",
+            activebackground="#174c31",
+            activeforeground="white",
+            selectcolor="#1f5b3a",
+            anchor="w",
+        ).pack(fill=tk.X, padx=10, pady=(10, 6))
+
         tk.Label(
             algo_panel,
             text="Algorithms",
@@ -119,7 +134,7 @@ class FreeCell_GUI:
             fg="white",
             font=("Segoe UI", 10, "bold"),
             anchor="w",
-        ).pack(fill=tk.X, padx=10, pady=(10, 6))
+        ).pack(fill=tk.X, padx=10, pady=(0, 6))
 
         tk.Button(algo_panel, text="BFS", command=self.solve_with_bfs, width=14).pack(fill=tk.X, padx=10, pady=4)
         tk.Button(algo_panel, text="DFS", command=self.solve_with_dfs, width=14).pack(fill=tk.X, padx=10, pady=4)
@@ -830,6 +845,9 @@ class FreeCell_GUI:
             self.status_var.set("Invalid move to foundation.")
 
     def _auto_move_to_foundation_internal(self):
+        if not self.foundation_priority_var.get():
+            return 0
+
         moved = 0
         while True:
             step_done = False
@@ -868,19 +886,35 @@ class FreeCell_GUI:
     def run(self):
         self.root.mainloop()
 
+    def _set_ai_solving_status(self, best_foundation_progress):
+        percent = (best_foundation_progress / 52) * 100
+        self.status_var.set(f"AI solving: {percent:.1f}% (best foundation progress)")
+
+    def _make_ai_progress_callback(self):
+        def on_progress(progress_data):
+            best_progress = progress_data.get("best_foundation_progress", 0)
+            self.root.after(0, lambda p=best_progress: self._set_ai_solving_status(p))
+
+        return on_progress
+
     def solve_with_bfs(self):
         if getattr(self, "is_solving", False):
             return
 
         self.is_solving = True
-        self.status_var.set("BFS is running...")
+        start_progress = sum(self.state.foundations.values())
+        self._set_ai_solving_status(start_progress)
         self.root.update()
 
         def worker_thread():
             try:
                 from solvers.bfs_solver import BFSSolver
-                solver = BFSSolver()
-                path, metrics = solver.solve(self.state)
+                solver = BFSSolver(debug=True, debug_every=100000)
+                path, metrics = solver.solve(
+                    self.state,
+                    progress_callback=self._make_ai_progress_callback(),
+                    foundation_priority_mode=self.foundation_priority_var.get(),
+                )
                 self.root.after(0, lambda: self._on_solver_complete("BFS", path, metrics))
             except NotImplementedError:
                 self.root.after(0, lambda: self._on_solver_not_implemented("BFS"))
@@ -892,14 +926,19 @@ class FreeCell_GUI:
             return
 
         self.is_solving = True
-        self.status_var.set("DFS is running...")
+        start_progress = sum(self.state.foundations.values())
+        self._set_ai_solving_status(start_progress)
         self.root.update()
 
         def worker_thread():
             try:
                 from solvers.dfs_solver import DFSSolver
-                solver = DFSSolver()
-                path, metrics = solver.solve(self.state)
+                solver = DFSSolver(debug=True, debug_every=100000)
+                path, metrics = solver.solve(
+                    self.state,
+                    progress_callback=self._make_ai_progress_callback(),
+                    foundation_priority_mode=self.foundation_priority_var.get(),
+                )
                 self.root.after(0, lambda: self._on_solver_complete("DFS", path, metrics))
             except NotImplementedError:
                 self.root.after(0, lambda: self._on_solver_not_implemented("DFS"))
@@ -911,13 +950,19 @@ class FreeCell_GUI:
             return
 
         self.is_solving = True
-        self.status_var.set("AI đang suy nghĩ...")
+        start_progress = sum(self.state.foundations.values())
+        self._set_ai_solving_status(start_progress)
         self.root.update()
 
         def worker_thread():
             from solvers.astar_solver import AStarSolver
+
             solver = AStarSolver(debug=True, debug_every=1000)
-            path, metrics = solver.solve(self.state)
+            path, metrics = solver.solve(
+                self.state,
+                progress_callback=self._make_ai_progress_callback(),
+                foundation_priority_mode=self.foundation_priority_var.get(),
+            )
             self.root.after(0, lambda: self._on_solver_complete("A*", path, metrics))
 
         threading.Thread(target=worker_thread, daemon=True).start()
@@ -925,13 +970,18 @@ class FreeCell_GUI:
     def solve_with_ucs(self):
         if getattr(self, "is_solving", False): return
         self.is_solving = True
-        self.status_var.set("UCS đang chạy... ")
+        start_progress = sum(self.state.foundations.values())
+        self._set_ai_solving_status(start_progress)
         self.root.update()
 
         def worker():
             from solvers.ucs_solver import UCSSolver
-            solver = UCSSolver(debug=True, debug_every=1000)
-            path, metrics = solver.solve(self.state)
+            solver = UCSSolver(debug=True, debug_every=100000)
+            path, metrics = solver.solve(
+                self.state,
+                progress_callback=self._make_ai_progress_callback(),
+                foundation_priority_mode=self.foundation_priority_var.get(),
+            )
             self.root.after(0, lambda: self._on_solver_complete("UCS", path, metrics))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -987,8 +1037,8 @@ class FreeCell_GUI:
 
         if not path:
             from tkinter import messagebox
-            self.status_var.set("Hoàn thành! AI đã giải xong ván bài.")
-            messagebox.showinfo("Hoàn thành", "AI đã giải xong ván bài!")
+            self.status_var.set("Completed! AI finished solving this game.")
+            messagebox.showinfo("Completed", "AI finished solving this game!")
             return
 
         move = path.pop(0)
@@ -1009,7 +1059,7 @@ class FreeCell_GUI:
         elif move.move_type == 'FREECELL_TO_FOUNDATION':
             self.state = FreeCell.move_freecell_to_foundation(self.state, move.from_location)
 
-        self.status_var.set(f"AI đang đi: {str(move)}")
+        self.status_var.set(f"AI move: {str(move)}")
         self.render()
         self.root.update()
         self.root.after(300, lambda: self.animate_solution(path))

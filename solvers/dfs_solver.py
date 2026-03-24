@@ -24,7 +24,7 @@ class DFSSolver:
         if self.debug:
             print(f"[DFS] {message}")
 
-    def solve(self, initial_state):
+    def solve(self, initial_state, progress_callback=None, foundation_priority_mode=False):
         """Solve FreeCell using depth-limited DFS graph search."""
         from game.freecell import FreeCell
 
@@ -38,6 +38,15 @@ class DFSSolver:
         generated_nodes = 1
         frontier_peak = 1
         pruned_by_depth = 0
+        best_foundation_progress = sum(initial_state.foundations.values())
+
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "best_foundation_progress": best_foundation_progress,
+                    "expanded_nodes": expanded_nodes,
+                }
+            )
 
         self._debug_log(f"start max_depth={self.max_depth}")
 
@@ -56,10 +65,22 @@ class DFSSolver:
                         "frontier_peak": frontier_peak,
                         "pruned_by_depth": pruned_by_depth,
                         "terminated_by": "time_limit",
+                        "best_foundation_progress": best_foundation_progress,
                     }
 
             current_state, depth = stack.pop()
             expanded_nodes += 1
+            current_progress = sum(current_state.foundations.values())
+
+            if current_progress > best_foundation_progress:
+                best_foundation_progress = current_progress
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "best_foundation_progress": best_foundation_progress,
+                            "expanded_nodes": expanded_nodes,
+                        }
+                    )
 
             if self.max_expansions is not None and expanded_nodes >= self.max_expansions:
                 elapsed = time.time() - start_time
@@ -74,13 +95,13 @@ class DFSSolver:
                     "frontier_peak": frontier_peak,
                     "pruned_by_depth": pruned_by_depth,
                     "terminated_by": "expansion_limit",
+                    "best_foundation_progress": best_foundation_progress,
                 }
 
             if self.debug and expanded_nodes % self.debug_every == 0:
-                progress = sum(current_state.foundations.values())
                 self._debug_log(
                     f"expanded={expanded_nodes} stack={len(stack)} best_depth={len(best_depth)} "
-                    f"depth={depth} foundation_progress={progress}"
+                    f"depth={depth} foundation_progress={current_progress}"
                 )
 
             if current_state.is_goal_state():
@@ -106,13 +127,17 @@ class DFSSolver:
                     "generated_nodes": generated_nodes,
                     "frontier_peak": frontier_peak,
                     "pruned_by_depth": pruned_by_depth,
+                    "best_foundation_progress": best_foundation_progress,
                 }
 
             if self.max_depth is not None and depth >= self.max_depth:
                 pruned_by_depth += 1
                 continue
 
-            successors = FreeCell.get_successors(current_state)
+            successors = FreeCell.get_successors(
+                current_state,
+                foundation_only=foundation_priority_mode,
+            )
 
             # Push in reverse so the first successor is explored first.
             for next_state, move in reversed(successors):
@@ -141,4 +166,5 @@ class DFSSolver:
             "generated_nodes": generated_nodes,
             "frontier_peak": frontier_peak,
             "pruned_by_depth": pruned_by_depth,
+            "best_foundation_progress": best_foundation_progress,
         }

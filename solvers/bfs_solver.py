@@ -17,7 +17,7 @@ class BFSSolver:
         if self.debug:
             print(f"[BFS] {message}")
 
-    def solve(self, initial_state):
+    def solve(self, initial_state, progress_callback=None, foundation_priority_mode=False):
         """Solve FreeCell using BFS graph search."""
         from game.freecell import FreeCell
 
@@ -30,6 +30,15 @@ class BFSSolver:
         expanded_nodes = 0
         generated_nodes = 1
         frontier_peak = 1
+        best_foundation_progress = sum(initial_state.foundations.values())
+
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "best_foundation_progress": best_foundation_progress,
+                    "expanded_nodes": expanded_nodes,
+                }
+            )
 
         self._debug_log("start")
 
@@ -47,10 +56,22 @@ class BFSSolver:
                         "generated_nodes": generated_nodes,
                         "frontier_peak": frontier_peak,
                         "terminated_by": "time_limit",
+                        "best_foundation_progress": best_foundation_progress,
                     }
 
             current_state = frontier.popleft()
             expanded_nodes += 1
+            current_progress = sum(current_state.foundations.values())
+
+            if current_progress > best_foundation_progress:
+                best_foundation_progress = current_progress
+                if progress_callback is not None:
+                    progress_callback(
+                        {
+                            "best_foundation_progress": best_foundation_progress,
+                            "expanded_nodes": expanded_nodes,
+                        }
+                    )
 
             if self.max_expansions is not None and expanded_nodes >= self.max_expansions:
                 elapsed = time.time() - start_time
@@ -64,13 +85,13 @@ class BFSSolver:
                     "generated_nodes": generated_nodes,
                     "frontier_peak": frontier_peak,
                     "terminated_by": "expansion_limit",
+                    "best_foundation_progress": best_foundation_progress,
                 }
 
             if self.debug and expanded_nodes % self.debug_every == 0:
-                progress = sum(current_state.foundations.values())
                 self._debug_log(
                     f"expanded={expanded_nodes} frontier={len(frontier)} visited={len(visited)} "
-                    f"foundation_progress={progress}"
+                    f"foundation_progress={current_progress}"
                 )
 
             if current_state.is_goal_state():
@@ -95,9 +116,13 @@ class BFSSolver:
                     "solution_length": len(path),
                     "generated_nodes": generated_nodes,
                     "frontier_peak": frontier_peak,
+                    "best_foundation_progress": best_foundation_progress,
                 }
 
-            for next_state, move in FreeCell.get_successors(current_state):
+            for next_state, move in FreeCell.get_successors(
+                current_state,
+                foundation_only=foundation_priority_mode,
+            ):
                 if next_state in visited:
                     continue
 
@@ -119,4 +144,5 @@ class BFSSolver:
             "time_taken": elapsed,
             "generated_nodes": generated_nodes,
             "frontier_peak": frontier_peak,
+            "best_foundation_progress": best_foundation_progress,
         }
