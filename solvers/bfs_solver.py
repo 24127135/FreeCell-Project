@@ -128,8 +128,46 @@ class BFSSolver:
 
                 visited.add(next_state)
                 came_from[next_state] = (current_state, move)
-                frontier.append(next_state)
                 generated_nodes += 1
+
+                # BFS can safely stop on first generated goal because states are expanded by depth.
+                if next_state.is_goal_state():
+                    next_progress = sum(next_state.foundations.values())
+                    if next_progress > best_foundation_progress:
+                        best_foundation_progress = next_progress
+                        if progress_callback is not None:
+                            progress_callback(
+                                {
+                                    "best_foundation_progress": best_foundation_progress,
+                                    "expanded_nodes": expanded_nodes,
+                                }
+                            )
+
+                    end_time = time.time()
+                    path = []
+                    curr = next_state
+                    while came_from[curr][0] is not None:
+                        parent, move_item = came_from[curr]
+                        path.append(move_item)
+                        curr = parent
+                    path.reverse()
+
+                    self._debug_log(
+                        f"solved_early expanded={expanded_nodes} generated={generated_nodes} "
+                        f"frontier_peak={frontier_peak} solution_len={len(path)} "
+                        f"time={end_time - start_time:.3f}s"
+                    )
+
+                    return path, {
+                        "time_taken": end_time - start_time,
+                        "expanded_nodes": expanded_nodes,
+                        "solution_length": len(path),
+                        "generated_nodes": generated_nodes,
+                        "frontier_peak": frontier_peak,
+                        "best_foundation_progress": best_foundation_progress,
+                    }
+
+                frontier.append(next_state)
 
             if len(frontier) > frontier_peak:
                 frontier_peak = len(frontier)
