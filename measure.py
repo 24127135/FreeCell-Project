@@ -6,18 +6,14 @@ import tracemalloc
 from game import Card, GameState
 from gui.interface import FreeCell_GUI
 
-# Import your 4 algorithms
 from solvers.astar_solver import AStarSolver
 from solvers.bfs_solver import BFSSolver
 from solvers.dfs_solver import DFSSolver
 from solvers.ucs_solver import UCSSolver
 
-# --- DEFINE TEST CASES ---
 def get_11_cards_state():
-    # 41 cards in foundations (distributed evenly: 11, 10, 10, 10)
     foundations = {'S': 11, 'C': 10, 'H': 10, 'D': 10}
-    
-    # 11 remaining cards distributed across the cascades
+
     cascades = [
         [Card(12, 'S'), Card(13, 'H')],
         [Card(11, 'C'), Card(12, 'D')],
@@ -31,10 +27,8 @@ def get_11_cards_state():
     return GameState(cascades=cascades, free_cells=[None]*4, foundations=foundations)
 
 def get_10_cards_state():
-    # 42 cards in foundations (distributed evenly: 11, 11, 10, 10)
     foundations = {'S': 11, 'C': 11, 'H': 10, 'D': 10}
-    
-    # 10 remaining cards distributed across the cascades
+
     cascades = [
         [Card(12, 'S'), Card(13, 'H')],
         [Card(12, 'C'), Card(13, 'D')],
@@ -185,12 +179,10 @@ class AlgorithmTesterUI:
             f"{'-'*40}"
         )
 
-        # Update Dictionary and file
         config_key = (case_val, priority_val, name)
         self.saved_results[config_key] = result_text
         self._rewrite_file()
 
-        # Update UI safely
         self.root.after(0, self.log, result_text)
         self.root.after(0, self.toggle_buttons, tk.NORMAL)
 
