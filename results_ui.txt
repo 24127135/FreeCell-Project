@@ -1,0 +1,67 @@
+UI TESTER RESULTS REPORT
+========================================
+
+[Test case 11 cards | Priority ON]
+--- BFS [SUCCESS] ---
+  * Search time: 4.8252 seconds
+  * Memory usage (peak memory): 63.2379 MB
+  * Expanded nodes: 49898
+  * Solution length: 13
+----------------------------------------
+
+[Test case 11 cards | Priority ON]
+--- DFS [SUCCESS] ---
+  * Search time: 0.0053 seconds
+  * Memory usage (peak memory): 0.0716 MB
+  * Expanded nodes: 14
+  * Solution length: 13
+----------------------------------------
+
+[Test case 11 cards | Priority ON]
+--- UCS [SUCCESS] ---
+  * Search time: 6.2235 seconds
+  * Memory usage (peak memory): 64.5768 MB
+  * Expanded nodes: 51716
+  * Solution length: 13
+----------------------------------------
+
+[Test case 11 cards | Priority ON]
+--- A* Search [SUCCESS] ---
+  * Search time: 0.0061 seconds
+  * Memory usage (peak memory): 0.0772 MB
+  * Expanded nodes: 14
+  * Solution length: 13
+----------------------------------------
+
+[Test case 10 cards | Priority ON]
+--- A* Search [SUCCESS] ---
+  * Search time: 0.0052 seconds
+  * Memory usage (peak memory): 0.0629 MB
+  * Expanded nodes: 13
+  * Solution length: 12
+----------------------------------------
+
+[Test case 10 cards | Priority ON]
+--- BFS [SUCCESS] ---
+  * Search time: 2.0283 seconds
+  * Memory usage (peak memory): 29.9505 MB
+  * Expanded nodes: 21357
+  * Solution length: 12
+----------------------------------------
+
+[Test case 10 cards | Priority ON]
+--- UCS [SUCCESS] ---
+  * Search time: 2.7734 seconds
+  * Memory usage (peak memory): 31.0497 MB
+  * Expanded nodes: 23612
+  * Solution length: 12
+----------------------------------------
+
+[Test case 10 cards | Priority ON]
+--- DFS [SUCCESS] ---
+  * Search time: 0.0047 seconds
+  * Memory usage (peak memory): 0.0606 MB
+  * Expanded nodes: 13
+  * Solution length: 12
+----------------------------------------
+
