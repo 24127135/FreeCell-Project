@@ -5,11 +5,18 @@
 # ============================================================
 
 import math
+import random
 import threading
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox
+from tkinter import font as tkfont
 from pathlib import Path
+
+try:
+    import ctypes
+except ImportError:
+    ctypes = None
 
 try:
     from PIL import Image, ImageTk
@@ -60,6 +67,21 @@ def _ease_out_quad(t):
     """Calculates quadratic ease-out value for animations."""
     t = max(0.0, min(1.0, float(t)))
     return 1 - (1 - t) * (1 - t)
+
+
+def _ease_in_out_sine(t):
+    """Calculates sine ease-in-out for natural acceleration/deceleration."""
+    t = max(0.0, min(1.0, float(t)))
+    return 0.5 - 0.5 * math.cos(math.pi * t)
+
+
+def _ease_in_out_sine_intense(t, intensity=1.65):
+    """Sharpens sine easing so acceleration/deceleration feels more dramatic."""
+    s = _ease_in_out_sine(t)
+    power = max(1.0, float(intensity))
+    if s < 0.5:
+        return 0.5 * ((s * 2.0) ** power)
+    return 1.0 - 0.5 * (((1.0 - s) * 2.0) ** power)
 
 
 def _point_in_rect(px, py, x, y, w, h):
@@ -251,10 +273,34 @@ def draw_pill_button(canvas, cx, cy, w, h, label, on_click, *, fill, outline, te
 class MenuScreen:
     """Manages the main menu overlay."""
 
-    def __init__(self, canvas, on_play, on_load_test):
+    CARD_SUITS = ["diamond", "heart", "club", "spade"]
+    CARD_RANKS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"]
+    CRT_GRID_COLOR = "#1a3d1a"
+    CRT_GRID_SPACING = 32
+    RAIN_CARD_W = 60
+    RAIN_CARD_H = 84
+    RAIN_MIN_SCALE = 0.70
+    RAIN_MAX_SCALE = 1.35
+    RAIN_GRAVITY = 0.035
+    RAIN_MAX_SPEED = 2.4
+    RAIN_SPIN_SPEED_MIN = 0.03
+    RAIN_SPIN_SPEED_MAX = 0.10
+    RAIN_SPIN_ACCEL = 0.0012
+    RAIN_NUM_CARDS = 14
+    RAIN_FALLBACK_CARDS = 8
+    RAIN_SLOW_FRAME_SEC = 0.03
+    RAIN_FRAME_MS = 20
+    RESOLUTION_VISIBLE_ROWS = 4
+
+    def __init__(self, canvas, on_play, on_load_test, on_set_resolution=None, get_resolution_options=None, get_current_resolution_label=None, on_show_menu=None, on_hide_menu=None):
         self.canvas = canvas
         self.on_play = on_play
         self.on_load_test = on_load_test
+        self.on_set_resolution = on_set_resolution
+        self.get_resolution_options = get_resolution_options
+        self.get_current_resolution_label = get_current_resolution_label
+        self.on_show_menu = on_show_menu
+        self.on_hide_menu = on_hide_menu
 
         self._item_ids = []
         self._bg_photo = None
@@ -266,18 +312,144 @@ class MenuScreen:
         self._panel_geometry = None
         self._fade_overlay = None
         self._resize_job = None
+        self._blink_job = None
+        self._menu_active = False
+        self._cursor_visible = True
+        self._cursor_id = None
+        self._play_text_id = None
+        self._test_text_id = None
+        self._resolution_text_id = None
+        self._menu_bind_id = None
+        self._wheel_bind_id = None
+        self._wheel_up_bind_id = None
+        self._wheel_down_bind_id = None
+        self._panel_mode = None
+        self._resolution_scroll_index = 0
+        self._rain_active = False
+        self._rain_job = None
+        self._falling_cards = []
+        self._card_photos = []
+        self._font_title = None
+        self._font_sub = None
+        self._font_menu = None
+        self._font_footer = None
+        self._font_ascii_title = None
+        self._menu_title_text = None
+        self._ui_scale = 1.0
+
+        self._load_menu_fonts()
+        self._load_menu_title_text()
+
+    def set_ui_scale(self, scale):
+        """Updates menu font and hit-area scaling for the active resolution."""
+        new_scale = max(0.85, min(2.4, float(scale)))
+        if abs(new_scale - self._ui_scale) < 0.01:
+            return
+
+        self._ui_scale = new_scale
+
+        if self._font_title is not None:
+            self._font_title.configure(size=max(24, int(round(36 * new_scale))))
+        if self._font_sub is not None:
+            self._font_sub.configure(size=max(9, int(round(11 * new_scale))))
+        if self._font_menu is not None:
+            self._font_menu.configure(size=max(10, int(round(12 * new_scale))))
+        if self._font_footer is not None:
+            self._font_footer.configure(size=max(6, int(round(7 * new_scale))))
+        if self._font_ascii_title is not None:
+            self._font_ascii_title.configure(size=max(8, int(round(9 * new_scale))))
+
+        if self._menu_active and not self._panel_animating and self._fade_overlay is None:
+            self._redraw()
+
+    def _load_menu_title_text(self):
+        """Loads the menu title art from FREECELL.txt if available."""
+        title_path = Path(__file__).resolve().parent / "assets" / "Fonts" / "FREECELL.txt"
+        try:
+            text = title_path.read_text(encoding="utf-8").strip("\n")
+        except OSError:
+            text = ""
+        self._menu_title_text = text if text else None
+
+    def _load_menu_fonts(self):
+        """Loads pixel-style menu fonts with safe fallback when unavailable."""
+        font_path = Path(__file__).resolve().parent / "assets" / "fonts" / "PressStart2P-Regular.ttf"
+        if ctypes is not None and hasattr(ctypes, "windll") and font_path.exists():
+            try:
+                ctypes.windll.gdi32.AddFontResourceW(str(font_path))
+            except Exception:
+                pass
+
+        try:
+            self._font_title = tkfont.Font(family="Press Start 2P", size=36)
+            self._font_sub = tkfont.Font(family="Press Start 2P", size=11)
+            self._font_menu = tkfont.Font(family="Press Start 2P", size=12)
+            self._font_footer = tkfont.Font(family="Press Start 2P", size=7)
+        except Exception:
+            self._font_title = tkfont.Font(family="Courier", size=28, weight="bold")
+            self._font_sub = tkfont.Font(family="Courier", size=11, weight="bold")
+            self._font_menu = tkfont.Font(family="Courier", size=12, weight="bold")
+            self._font_footer = tkfont.Font(family="Courier", size=8)
+
+        self._font_ascii_title = tkfont.Font(family="Consolas", size=9, weight="bold")
 
     def show(self):
         """Displays the menu screen and binds resize events."""
+        self._menu_active = True
+        self._cursor_visible = True
+        if callable(self.on_show_menu):
+            self.on_show_menu()
+        try:
+            self.canvas.itemconfigure("hud", state="hidden")
+        except tk.TclError:
+            pass
         self._redraw()
-        self.canvas.bind("<Configure>", self._on_canvas_configure, add="+")
+        self._menu_bind_id = self.canvas.bind("<Configure>", self._on_canvas_configure, add="+")
+        self._wheel_bind_id = self.canvas.bind("<MouseWheel>", self._on_canvas_mousewheel, add="+")
+        self._wheel_up_bind_id = self.canvas.bind("<Button-4>", self._on_canvas_mousewheel_up, add="+")
+        self._wheel_down_bind_id = self.canvas.bind("<Button-5>", self._on_canvas_mousewheel_down, add="+")
+        self._start_cursor_blink()
 
     def hide(self):
         """Hides the menu screen and cleans up resources."""
+        self._menu_active = False
+        self._stop_card_rain()
+        if callable(self.on_hide_menu):
+            self.on_hide_menu()
         try:
-            self.canvas.unbind("<Configure>")
+            self.canvas.itemconfigure("hud", state="normal")
         except tk.TclError:
             pass
+        if self._blink_job is not None:
+            try:
+                self.canvas.after_cancel(self._blink_job)
+            except tk.TclError:
+                pass
+            self._blink_job = None
+        if self._menu_bind_id is not None:
+            try:
+                self.canvas.unbind("<Configure>", self._menu_bind_id)
+            except tk.TclError:
+                pass
+            self._menu_bind_id = None
+        if self._wheel_bind_id is not None:
+            try:
+                self.canvas.unbind("<MouseWheel>", self._wheel_bind_id)
+            except tk.TclError:
+                pass
+            self._wheel_bind_id = None
+        if self._wheel_up_bind_id is not None:
+            try:
+                self.canvas.unbind("<Button-4>", self._wheel_up_bind_id)
+            except tk.TclError:
+                pass
+            self._wheel_up_bind_id = None
+        if self._wheel_down_bind_id is not None:
+            try:
+                self.canvas.unbind("<Button-5>", self._wheel_down_bind_id)
+            except tk.TclError:
+                pass
+            self._wheel_down_bind_id = None
         if self._resize_job is not None:
             try:
                 self.canvas.after_cancel(self._resize_job)
@@ -285,18 +457,24 @@ class MenuScreen:
                 pass
             self._resize_job = None
 
-        for item_id in self._item_ids:
-            try:
-                self.canvas.delete(item_id)
-            except tk.TclError:
-                pass
+        try:
+            self.canvas.delete("menu")
+        except tk.TclError:
+            pass
         self._item_ids.clear()
         self._buttons.clear()
         self._test_panel_items.clear()
+        self._falling_cards = []
+        self._card_photos = []
         self._bg_photo = None
         self._fade_overlay = None
         self._panel_open = False
         self._panel_animating = False
+        self._panel_mode = None
+        self._resolution_scroll_index = 0
+        self._cursor_id = None
+        self._play_text_id = None
+        self._test_text_id = None
 
     def _on_canvas_configure(self, _evt=None):
         """Handles canvas resize events for the menu."""
@@ -313,6 +491,23 @@ class MenuScreen:
 
         self._resize_job = self.canvas.after(60, run)
 
+    def _on_canvas_mousewheel(self, event):
+        """Scrolls resolution panel rows with mouse wheel when panel is open."""
+        if not self._panel_open or self._panel_mode != "resolution":
+            return
+        delta = 1 if getattr(event, "delta", 0) < 0 else -1
+        self._scroll_resolution(delta)
+
+    def _on_canvas_mousewheel_up(self, _event):
+        """Linux wheel-up support for resolution panel scrolling."""
+        if self._panel_open and self._panel_mode == "resolution":
+            self._scroll_resolution(-1)
+
+    def _on_canvas_mousewheel_down(self, _event):
+        """Linux wheel-down support for resolution panel scrolling."""
+        if self._panel_open and self._panel_mode == "resolution":
+            self._scroll_resolution(1)
+
     def _redraw(self):
         """Redraws the entire menu interface."""
         self.canvas.update()
@@ -320,57 +515,270 @@ class MenuScreen:
         h = max(1, int(self.canvas.winfo_height()))
 
         self._clear_test_panel()
-        for item_id in self._item_ids:
-            try:
-                self.canvas.delete(item_id)
-            except tk.TclError:
-                pass
+        try:
+            self.canvas.delete("menu")
+        except tk.TclError:
+            pass
         self._item_ids.clear()
         self._buttons.clear()
 
-        # Background loading logic simplified for brevity
-        bg_path = Path(__file__).resolve().parent / "assets" / "Backgrounds" / "background_menu.png"
-        if Image is not None and ImageTk is not None and bg_path.exists():
-            bg_image = Image.open(bg_path)
-            bg_image = bg_image.resize((w, h), Image.LANCZOS)
-            self._bg_photo = ImageTk.PhotoImage(bg_image)
-            self._item_ids.append(self.canvas.create_image(0, 0, anchor="nw", image=self._bg_photo))
+        self._bg_photo = None
+        self.canvas.configure(bg="#0d0f0d")
+        self._item_ids.append(self.canvas.create_rectangle(0, 0, w, h, fill="#0d0f0d", outline="", tags=("menu",)))
+        self._draw_crt_grid(w, h)
+
+        cx = w / 2
+        title_y = h * 0.28
+        if self._menu_title_text:
+            self._item_ids.append(
+                self.canvas.create_text(
+                    cx,
+                    title_y,
+                    text=self._menu_title_text,
+                    fill="#00ff41",
+                    font=self._font_ascii_title,
+                    anchor="center",
+                    justify="center",
+                    tags=("menu", "menu_ui"),
+                )
+            )
         else:
-            self._bg_photo = None
-            self._item_ids.append(self.canvas.create_rectangle(0, 0, w, h, fill="#0f4a2b", outline=""))
+            self._item_ids.append(
+                self.canvas.create_text(
+                    cx,
+                    title_y,
+                    text="FREECELL",
+                    fill="#00ff41",
+                    font=self._font_title,
+                    anchor="center",
+                    tags=("menu", "menu_ui"),
+                )
+            )
+            self._item_ids.append(
+                self.canvas.create_text(
+                    cx,
+                    title_y + 58,
+                    text="SOLITAIRE",
+                    fill="#00a827",
+                    font=self._font_sub,
+                    anchor="center",
+                    tags=("menu", "menu_ui"),
+                )
+            )
+        self._item_ids.append(
+            self.canvas.create_line(
+                cx - 120,
+                title_y + 82,
+                cx + 120,
+                title_y + 82,
+                fill="#0a2e0a",
+                width=2,
+                tags=("menu", "menu_ui"),
+            )
+        )
 
         self._draw_buttons(w, h)
 
         if self._panel_open:
-            x, y, pw, ph = self._panel_target_geometry()
-            self._draw_test_panel(x, y, pw, ph)
+            self._draw_active_panel()
+
+        self._start_card_rain(w, h)
+        self.canvas.tag_raise("menu_ui")
 
     def _draw_buttons(self, canvas_w, canvas_h):
         """Draws the main menu buttons."""
-        btn_w, btn_h = 220, 52
+        scale = self._ui_scale
         cx = canvas_w / 2
-        x = cx - btn_w / 2
-        y1 = canvas_h * 0.68 - btn_h / 2
-        y2 = y1 + btn_h + 32
+        play_y = canvas_h * 0.55
+        row_gap = max(38, int(round(44 * scale)))
+        test_y = play_y + row_gap
+        resolution_y = test_y + row_gap
+        hit_w = max(220, int(round(260 * scale)))
+        hit_h = max(34, int(round(38 * scale)))
 
-        play = draw_menu_button(self.canvas, x, y1, btn_w, btn_h, "Play Now", lambda: self._fade_out(self.on_play))
-        tests = draw_menu_button(self.canvas, x, y2, btn_w, btn_h, "Test Cases", self._toggle_test_panel)
+        self._cursor_id = self.canvas.create_text(
+            cx - max(70, int(round(90 * scale))),
+            play_y,
+            text="▶",
+            fill="#00ff41",
+            font=self._font_menu,
+            anchor="center",
+            tags=("menu", "menu_ui"),
+        )
+        self._item_ids.append(self._cursor_id)
 
-        for d in (play, tests):
-            for item_id in d.values():
-                self._item_ids.append(item_id)
+        self._play_text_id = self.canvas.create_text(
+            cx + max(8, int(round(10 * scale))),
+            play_y,
+            text="PLAY NOW",
+            fill="#00ff41",
+            font=self._font_menu,
+            anchor="center",
+            tags=("menu", "menu_ui"),
+        )
+        self._item_ids.append(self._play_text_id)
 
-        self._buttons["play"] = {"geom": (x, y1, btn_w, btn_h), "items": play}
-        self._buttons["tests"] = {"geom": (x, y2, btn_w, btn_h), "items": tests}
+        self._test_text_id = self.canvas.create_text(
+            cx + max(8, int(round(10 * scale))),
+            test_y,
+            text="TEST CASES",
+            fill="#00a827",
+            font=self._font_menu,
+            anchor="center",
+            tags=("menu", "menu_ui"),
+        )
+        self._item_ids.append(self._test_text_id)
+
+        res_label = self.get_current_resolution_label() if callable(self.get_current_resolution_label) else "1280x720"
+        self._resolution_text_id = self.canvas.create_text(
+            cx + max(8, int(round(10 * scale))),
+            resolution_y,
+            text="RESOLUTION",
+            fill="#00a827",
+            font=self._font_menu,
+            anchor="center",
+            tags=("menu", "menu_ui"),
+        )
+        self._item_ids.append(self._resolution_text_id)
+
+        play_hit = self.canvas.create_rectangle(
+            cx - hit_w / 2,
+            play_y - hit_h / 2,
+            cx + hit_w / 2,
+            play_y + hit_h / 2,
+            fill="",
+            outline="",
+            tags=("menu", "menu_ui"),
+        )
+        test_hit = self.canvas.create_rectangle(
+            cx - hit_w / 2,
+            test_y - hit_h / 2,
+            cx + hit_w / 2,
+            test_y + hit_h / 2,
+            fill="",
+            outline="",
+            tags=("menu", "menu_ui"),
+        )
+        res_hit = self.canvas.create_rectangle(
+            cx - hit_w / 2,
+            resolution_y - hit_h / 2,
+            cx + hit_w / 2,
+            resolution_y + hit_h / 2 + max(20, int(round(28 * scale))),
+            fill="",
+            outline="",
+            tags=("menu", "menu_ui"),
+        )
+        self._item_ids.extend([play_hit, test_hit, res_hit])
+
+        def _play_enter(_evt=None):
+            self.canvas.itemconfig(self._play_text_id, fill="#ffffff")
+            self.canvas.config(cursor="hand2")
+            self._move_cursor_to(play_y)
+
+        def _play_leave(_evt=None):
+            self.canvas.itemconfig(self._play_text_id, fill="#00ff41")
+            self.canvas.config(cursor="")
+
+        def _test_enter(_evt=None):
+            self.canvas.itemconfig(self._test_text_id, fill="#ffffff")
+            self.canvas.config(cursor="hand2")
+            self._move_cursor_to(test_y)
+
+        def _test_leave(_evt=None):
+            self.canvas.itemconfig(self._test_text_id, fill="#00a827")
+            self.canvas.config(cursor="")
+
+        def _res_enter(_evt=None):
+            self.canvas.itemconfig(self._resolution_text_id, fill="#ffffff")
+            self.canvas.config(cursor="hand2")
+            self._move_cursor_to(resolution_y)
+
+        def _res_leave(_evt=None):
+            self.canvas.itemconfig(self._resolution_text_id, fill="#00a827")
+            self.canvas.config(cursor="")
+
+        def _play_release(_evt=None):
+            self._fade_out(self.on_play)
+
+        def _test_release(_evt=None):
+            self._toggle_test_panel()
+
+        def _res_release(_evt=None):
+            self._toggle_resolution_panel()
+
+        for target in (play_hit, self._play_text_id):
+            self.canvas.tag_bind(target, "<Enter>", _play_enter)
+            self.canvas.tag_bind(target, "<Leave>", _play_leave)
+            self.canvas.tag_bind(target, "<ButtonRelease-1>", _play_release)
+
+        for target in (test_hit, self._test_text_id):
+            self.canvas.tag_bind(target, "<Enter>", _test_enter)
+            self.canvas.tag_bind(target, "<Leave>", _test_leave)
+            self.canvas.tag_bind(target, "<ButtonRelease-1>", _test_release)
+
+        for target in (res_hit, self._resolution_text_id):
+            self.canvas.tag_bind(target, "<Enter>", _res_enter)
+            self.canvas.tag_bind(target, "<Leave>", _res_leave)
+            self.canvas.tag_bind(target, "<ButtonRelease-1>", _res_release)
+
+        self._buttons["play"] = {"geom": (cx - hit_w / 2, play_y - hit_h / 2, hit_w, hit_h), "items": {"label": self._play_text_id, "hit": play_hit}}
+        self._buttons["tests"] = {"geom": (cx - hit_w / 2, test_y - hit_h / 2, hit_w, hit_h), "items": {"label": self._test_text_id, "hit": test_hit}}
+        self._buttons["resolution"] = {"geom": (cx - hit_w / 2, resolution_y - hit_h / 2, hit_w, hit_h), "items": {"label": self._resolution_text_id, "hit": res_hit}}
+
+    def _move_cursor_to(self, y):
+        """Moves the menu cursor next to the active menu item."""
+        if self._cursor_id is None:
+            return
+        try:
+            x = self.canvas.coords(self._cursor_id)[0]
+            self.canvas.coords(self._cursor_id, x, y)
+        except tk.TclError:
+            pass
+
+    def _start_cursor_blink(self):
+        """Starts the blink loop for the active menu cursor."""
+        def _blink():
+            if not self._menu_active:
+                self._blink_job = None
+                return
+            self._cursor_visible = not self._cursor_visible
+            if self._cursor_id is not None:
+                try:
+                    self.canvas.itemconfig(self._cursor_id, fill="#00ff41" if self._cursor_visible else "#0d0f0d")
+                except tk.TclError:
+                    pass
+            self._blink_job = self.canvas.after(500, _blink)
+
+        if self._blink_job is not None:
+            try:
+                self.canvas.after_cancel(self._blink_job)
+            except tk.TclError:
+                pass
+        self._blink_job = self.canvas.after(500, _blink)
 
     def _toggle_test_panel(self):
         """Toggles the visibility of the test case selection panel."""
+        self._toggle_panel("tests")
+
+    def _toggle_resolution_panel(self):
+        """Toggles the visibility of the resolution dropdown panel."""
+        rows = self._resolution_rows()
+        current = self.get_current_resolution_label() if callable(self.get_current_resolution_label) else ""
+        if current in rows:
+            visible = self._resolution_visible_row_count()
+            idx = rows.index(current)
+            self._resolution_scroll_index = max(0, min(idx, max(0, len(rows) - visible)))
+        self._toggle_panel("resolution")
+
+    def _toggle_panel(self, mode):
+        """Generic panel toggle logic for tests/resolution panels."""
         if self._panel_animating:
             return
-        if self._panel_open:
+        if self._panel_open and self._panel_mode == mode:
             self._animate_panel_close()
-        else:
-            self._animate_panel_open()
+            return
+        self._panel_mode = mode
+        self._animate_panel_open()
 
     def _clear_test_panel(self):
         """Removes all test panel items from the canvas."""
@@ -381,25 +789,56 @@ class MenuScreen:
                 pass
         self._test_panel_items.clear()
 
-    def _panel_target_geometry(self):
-        """Calculates the target geometry for the test panel."""
-        (bx, by, bw, bh) = self._buttons["tests"]["geom"]
-        panel_w = 260
+    def _panel_target_geometry(self, panel_key, row_count):
+        """Calculates panel geometry under a specific menu button."""
+        scale = self._ui_scale
+        (bx, by, bw, bh) = self._buttons[panel_key]["geom"]
+        panel_w = max(240, int(round(260 * scale)))
         panel_x = bx + bw / 2 - panel_w / 2
-        panel_y = by + bh + 8
-        row_h = 48
-        padding_tb = 12
-        panel_h = padding_tb + row_h * 2 + padding_tb
+        panel_y = by + bh + max(6, int(round(8 * scale)))
+        row_h = max(36, int(round(48 * scale))) if panel_key == "tests" else max(30, int(round(36 * scale)))
+        padding_tb = max(8, int(round(12 * scale)))
+        panel_h = padding_tb + row_h * row_count + padding_tb
         return panel_x, panel_y, panel_w, panel_h
+
+    def _resolution_rows(self):
+        """Returns resolution labels for dropdown rows."""
+        options = self.get_resolution_options() if callable(self.get_resolution_options) else []
+        return options if options else ["1280x720"]
+
+    def _resolution_visible_row_count(self):
+        """Returns how many resolution rows are visible at once in the panel."""
+        return max(1, int(self.RESOLUTION_VISIBLE_ROWS))
+
+    def _scroll_resolution(self, delta):
+        """Scrolls the resolution list by delta rows and redraws the active panel."""
+        rows = self._resolution_rows()
+        visible = min(self._resolution_visible_row_count(), len(rows))
+        max_start = max(0, len(rows) - visible)
+        self._resolution_scroll_index = max(0, min(self._resolution_scroll_index + int(delta), max_start))
+        self._draw_active_panel()
+
+    def _draw_active_panel(self, visible_h=None):
+        """Draws whichever panel mode is currently active."""
+        if self._panel_mode == "resolution":
+            rows = self._resolution_rows()
+            visible_rows = min(self._resolution_visible_row_count(), len(rows))
+            x, y, w, full_h = self._panel_target_geometry("resolution", visible_rows)
+            self._draw_resolution_panel(x, y, w, full_h if visible_h is None else visible_h)
+            return
+
+        x, y, w, full_h = self._panel_target_geometry("tests", 2)
+        self._draw_test_panel(x, y, w, full_h if visible_h is None else visible_h)
 
     def _draw_test_panel(self, x, y, w, visible_h):
         """Draws the test panel at the specified location and size."""
         self._clear_test_panel()
         radius = 12
+        scale = self._ui_scale
 
         points = _rounded_rect_points(x, y, w, visible_h, radius)
         panel_rect = self.canvas.create_polygon(
-            points, smooth=True, splinesteps=12, fill="#0a2418", outline="#2d7a4f", width=1
+            points, smooth=True, splinesteps=12, fill="#0a2418", outline="#2d7a4f", width=1, tags=("menu", "menu_ui")
         )
         self._test_panel_items.append(panel_rect)
         self._item_ids.append(panel_rect)
@@ -407,8 +846,8 @@ class MenuScreen:
         if visible_h <= 4:
             return
 
-        row_h = 48
-        top_pad = 12
+        row_h = max(36, int(round(48 * scale)))
+        top_pad = max(8, int(round(12 * scale)))
         content_y0 = y + top_pad
 
         def add_row(row_idx, label, test_number):
@@ -417,13 +856,20 @@ class MenuScreen:
                 return
 
             text_id = self.canvas.create_text(
-                x + 16, row_top + row_h / 2, anchor="w", text=label, fill="#a8d5b5", font=("Georgia", 12)
+                x + max(12, int(round(16 * scale))),
+                row_top + row_h / 2,
+                anchor="w",
+                text=label,
+                fill="#a8d5b5",
+                font=("Georgia", max(10, int(round(12 * scale)))),
+                tags=("menu", "menu_ui"),
             )
             self._test_panel_items.append(text_id)
             self._item_ids.append(text_id)
 
-            btn_w, btn_h = 80, 32
-            btn_x = x + w - 16 - btn_w
+            btn_w = max(74, int(round(80 * scale)))
+            btn_h = max(28, int(round(32 * scale)))
+            btn_x = x + w - max(12, int(round(16 * scale))) - btn_w
             btn_y = row_top + (row_h - btn_h) / 2
 
             def do_load():
@@ -431,28 +877,114 @@ class MenuScreen:
 
             btn_items = draw_menu_button(self.canvas, btn_x, btn_y, btn_w, btn_h, "Load", do_load)
             for item_id in btn_items.values():
+                self.canvas.itemconfigure(item_id, tags=("menu", "menu_ui"))
                 self._test_panel_items.append(item_id)
                 self._item_ids.append(item_id)
 
         add_row(0, "Test Case 1", 1)
         add_row(1, "Test Case 2", 2)
 
+    def _draw_resolution_panel(self, x, y, w, visible_h):
+        """Draws a styled dropdown panel for resolution selection."""
+        self._clear_test_panel()
+        radius = 12
+        scale = self._ui_scale
+
+        points = _rounded_rect_points(x, y, w, visible_h, radius)
+        panel_rect = self.canvas.create_polygon(
+            points, smooth=True, splinesteps=12, fill="#0a2418", outline="#2d7a4f", width=1, tags=("menu", "menu_ui")
+        )
+        self._test_panel_items.append(panel_rect)
+        self._item_ids.append(panel_rect)
+
+        if visible_h <= 4:
+            return
+
+        rows = self._resolution_rows()
+        visible_count = min(self._resolution_visible_row_count(), len(rows))
+        max_start = max(0, len(rows) - visible_count)
+        self._resolution_scroll_index = max(0, min(self._resolution_scroll_index, max_start))
+        start = self._resolution_scroll_index
+        end = start + visible_count
+        shown_rows = rows[start:end]
+        current = self.get_current_resolution_label() if callable(self.get_current_resolution_label) else ""
+        row_h = max(30, int(round(36 * scale)))
+        top_pad = max(8, int(round(12 * scale)))
+        content_y0 = y + top_pad
+
+        for row_idx, label in enumerate(shown_rows):
+            row_top = content_y0 + row_idx * row_h
+            if row_top + row_h > y + visible_h - 6:
+                return
+
+            tint = "#00ff41" if label == current else "#a8d5b5"
+            text_id = self.canvas.create_text(
+                x + max(12, int(round(16 * scale))),
+                row_top + row_h / 2,
+                anchor="w",
+                text=label,
+                fill=tint,
+                font=("Georgia", max(9, int(round(11 * scale)))),
+                tags=("menu", "menu_ui"),
+            )
+            self._test_panel_items.append(text_id)
+            self._item_ids.append(text_id)
+
+            btn_w = max(66, int(round(72 * scale)))
+            btn_h = max(24, int(round(26 * scale)))
+            btn_x = x + w - max(12, int(round(16 * scale))) - btn_w
+            btn_y = row_top + (row_h - btn_h) / 2
+
+            def do_set(value=label):
+                if callable(self.on_set_resolution):
+                    self.on_set_resolution(value)
+                self._animate_panel_close()
+                self._redraw()
+
+            btn_items = draw_menu_button(self.canvas, btn_x, btn_y, btn_w, btn_h, "Set", do_set)
+            for item_id in btn_items.values():
+                self.canvas.itemconfigure(item_id, tags=("menu", "menu_ui"))
+                self._test_panel_items.append(item_id)
+                self._item_ids.append(item_id)
+
+        if len(rows) > visible_count:
+            arrow_x = x + w - max(14, int(round(18 * scale)))
+            arrow_font = ("Consolas", max(10, int(round(11 * scale))), "bold")
+            up_id = self.canvas.create_text(arrow_x, y + max(10, int(round(12 * scale))), text="▲", fill="#00ff41", font=arrow_font, anchor="center", tags=("menu", "menu_ui"))
+            dn_id = self.canvas.create_text(arrow_x, y + visible_h - max(10, int(round(12 * scale))), text="▼", fill="#00ff41", font=arrow_font, anchor="center", tags=("menu", "menu_ui"))
+            up_hit = self.canvas.create_rectangle(x + w - max(28, int(round(32 * scale))), y + 2, x + w - 4, y + max(18, int(round(22 * scale))), fill="", outline="", tags=("menu", "menu_ui"))
+            dn_hit = self.canvas.create_rectangle(x + w - max(28, int(round(32 * scale))), y + visible_h - max(18, int(round(22 * scale))), x + w - 4, y + visible_h - 2, fill="", outline="", tags=("menu", "menu_ui"))
+
+            for item_id in (up_id, dn_id, up_hit, dn_hit):
+                self._test_panel_items.append(item_id)
+                self._item_ids.append(item_id)
+
+            self.canvas.tag_bind(up_hit, "<ButtonRelease-1>", lambda _evt: self._scroll_resolution(-1))
+            self.canvas.tag_bind(dn_hit, "<ButtonRelease-1>", lambda _evt: self._scroll_resolution(1))
+            self.canvas.tag_bind(up_id, "<ButtonRelease-1>", lambda _evt: self._scroll_resolution(-1))
+            self.canvas.tag_bind(dn_id, "<ButtonRelease-1>", lambda _evt: self._scroll_resolution(1))
+
+
+
     def _animate_panel_open(self):
         """Animates the opening of the test panel."""
         self._panel_animating = True
         self._panel_open = True
-        x, y, w, full_h = self._panel_target_geometry()
         start = time.time()
         duration = 0.180
 
         def tick():
             t = (time.time() - start) / duration
             if t >= 1.0:
-                self._draw_test_panel(x, y, w, full_h)
+                self._draw_active_panel()
                 self._panel_animating = False
                 return
             eased = _ease_out_cubic(t)
-            self._draw_test_panel(x, y, w, full_h * eased)
+            if self._panel_mode == "resolution":
+                full_h = self._panel_target_geometry("resolution", min(self._resolution_visible_row_count(), len(self._resolution_rows())))[3]
+            else:
+                full_h = self._panel_target_geometry("tests", 2)[3]
+            self._draw_active_panel(full_h * eased)
             self.canvas.after(16, tick)
 
         tick()
@@ -460,7 +992,6 @@ class MenuScreen:
     def _animate_panel_close(self):
         """Animates the closing of the test panel."""
         self._panel_animating = True
-        x, y, w, full_h = self._panel_target_geometry()
         start = time.time()
         duration = 0.150
 
@@ -470,9 +1001,14 @@ class MenuScreen:
                 self._clear_test_panel()
                 self._panel_open = False
                 self._panel_animating = False
+                self._panel_mode = None
                 return
             eased = _ease_out_cubic(t)
-            self._draw_test_panel(x, y, w, full_h * (1.0 - eased))
+            if self._panel_mode == "resolution":
+                full_h = self._panel_target_geometry("resolution", min(self._resolution_visible_row_count(), len(self._resolution_rows())))[3]
+            else:
+                full_h = self._panel_target_geometry("tests", 2)[3]
+            self._draw_active_panel(full_h * (1.0 - eased))
             self.canvas.after(16, tick)
 
         tick()
@@ -507,6 +1043,172 @@ class MenuScreen:
 
         run_step(0)
 
+    def _draw_crt_grid(self, canvas_w, canvas_h):
+        """Draws dim CRT grid lines behind menu UI."""
+        for x in range(0, canvas_w, self.CRT_GRID_SPACING):
+            item_id = self.canvas.create_line(x, 0, x, canvas_h, fill=self.CRT_GRID_COLOR, width=0.5, tags=("menu",))
+            self._item_ids.append(item_id)
+        for y in range(0, canvas_h, self.CRT_GRID_SPACING):
+            item_id = self.canvas.create_line(0, y, canvas_w, y, fill=self.CRT_GRID_COLOR, width=0.5, tags=("menu",))
+            self._item_ids.append(item_id)
+
+    def _get_card_path(self, rank, suit):
+        """Builds menu rain card asset path from rank/suit."""
+        return Path(__file__).resolve().parent / "assets" / "Cards" / suit / f"{rank}_{suit}.png"
+
+    def _spawn_card(self, canvas_w, canvas_h, delay_frames=0):
+        """Creates a falling card descriptor used by the rain loop."""
+        suit = random.choice(self.CARD_SUITS)
+        rank = random.choice(self.CARD_RANKS)
+        path = self._get_card_path(rank, suit)
+
+        scale = random.uniform(self.RAIN_MIN_SCALE, self.RAIN_MAX_SCALE)
+        card_w = max(28, int(round(self.RAIN_CARD_W * scale)))
+        card_h = max(40, int(round(self.RAIN_CARD_H * scale)))
+
+        if Image is not None:
+            try:
+                img = Image.open(path).resize((card_w, card_h), Image.LANCZOS)
+            except Exception:
+                img = Image.new("RGB", (card_w, card_h), "#ffffff")
+        else:
+            img = None
+
+        # Keep menu rain away from center UI by spawning from side lanes only.
+        x_min = card_w
+        x_max = max(card_w + 1, canvas_w - card_w)
+        usable_w = max(1, x_max - x_min)
+        center_gap_ratio = 0.34
+        center_gap = int(usable_w * center_gap_ratio)
+        center_mid = (x_min + x_max) // 2
+        gap_left = center_mid - (center_gap // 2)
+        gap_right = center_mid + (center_gap // 2)
+
+        left_lane = (x_min, max(x_min, gap_left))
+        right_lane = (min(x_max, gap_right), x_max)
+        lane_choices = []
+        if left_lane[1] - left_lane[0] >= 6:
+            lane_choices.append(left_lane)
+        if right_lane[1] - right_lane[0] >= 6:
+            lane_choices.append(right_lane)
+        if not lane_choices:
+            lane_choices.append((x_min, x_max))
+        lane_start, lane_end = random.choice(lane_choices)
+        spin_dir = random.choice((-1.0, 1.0))
+        spin_speed = spin_dir * random.uniform(self.RAIN_SPIN_SPEED_MIN, self.RAIN_SPIN_SPEED_MAX)
+        y_low = min(-canvas_h, -card_h)
+        y_high = max(-canvas_h, -card_h)
+        return {
+            "suit": suit,
+            "rank": rank,
+            "img_base": img,
+            "photo": None,
+            "canvas_id": None,
+            "w": card_w,
+            "h": card_h,
+            "x": random.randint(lane_start, lane_end),
+            "y": random.randint(y_low, y_high),
+            "vy": random.uniform(0.01, 0.08),
+            "angle": random.uniform(-18.0, 18.0),
+            "spin_speed": spin_speed,
+            "spin_accel": spin_dir * self.RAIN_SPIN_ACCEL,
+            "delay": int(max(0, delay_frames)),
+            "active": delay_frames == 0,
+        }
+
+    def _start_card_rain(self, canvas_w, canvas_h):
+        """Initializes falling cards and starts rain animation loop."""
+        self._stop_card_rain()
+        self._rain_active = True
+        self._falling_cards = []
+        self._card_photos = []
+
+        for i in range(self.RAIN_NUM_CARDS):
+            card = self._spawn_card(canvas_w, canvas_h, delay_frames=i * 14)
+            card["canvas_id"] = self.canvas.create_image(card["x"], card["y"], image=None, anchor="center", tags=("menu",))
+            self._item_ids.append(card["canvas_id"])
+            self._falling_cards.append(card)
+
+        self._run_card_rain()
+
+    def _stop_card_rain(self):
+        """Stops rain loop and releases image references."""
+        self._rain_active = False
+        if self._rain_job is not None:
+            try:
+                self.canvas.after_cancel(self._rain_job)
+            except tk.TclError:
+                pass
+            self._rain_job = None
+        self._falling_cards = []
+        self._card_photos = []
+
+    def _run_card_rain(self):
+        """Animates falling cards behind menu UI."""
+        if not self._rain_active:
+            self._rain_job = None
+            return
+
+        frame_start = time.time()
+        canvas_w = max(1, int(self.canvas.winfo_width()))
+        canvas_h = max(1, int(self.canvas.winfo_height()))
+
+        for idx, card in enumerate(self._falling_cards):
+            if card["delay"] > 0:
+                card["delay"] -= 1
+                continue
+
+            if not card["active"]:
+                card["active"] = True
+
+            fall_progress = _clamp(card["y"] / max(1, canvas_h), 0.0, 1.0)
+            accel_mult = 1.0 + (0.35 * fall_progress)
+            card["vy"] = min(card["vy"] + (self.RAIN_GRAVITY * accel_mult), self.RAIN_MAX_SPEED)
+            card["y"] += card["vy"]
+
+            card["spin_speed"] += card["spin_accel"]
+            card["angle"] += card["spin_speed"]
+
+            photo = None
+            if ImageTk is not None and card["img_base"] is not None:
+                try:
+                    rotated = card["img_base"].rotate(card["angle"], expand=True, resample=Image.BICUBIC)
+                    photo = ImageTk.PhotoImage(rotated)
+                except Exception:
+                    photo = None
+
+            if photo is not None:
+                card["photo"] = photo
+                self._card_photos.append(photo)
+                if len(self._card_photos) > self.RAIN_NUM_CARDS * 4:
+                    self._card_photos = self._card_photos[-(self.RAIN_NUM_CARDS * 2):]
+                try:
+                    self.canvas.itemconfig(card["canvas_id"], image=photo)
+                except tk.TclError:
+                    pass
+
+            try:
+                self.canvas.coords(card["canvas_id"], card["x"], card["y"])
+            except tk.TclError:
+                pass
+
+            if card["y"] > canvas_h + card["h"]:
+                new_card = self._spawn_card(canvas_w, canvas_h, delay_frames=0)
+                new_card["canvas_id"] = card["canvas_id"]
+                self._falling_cards[idx] = new_card
+
+        frame_elapsed = time.time() - frame_start
+        if frame_elapsed > self.RAIN_SLOW_FRAME_SEC and len(self._falling_cards) > self.RAIN_FALLBACK_CARDS:
+            for card in self._falling_cards[self.RAIN_FALLBACK_CARDS:]:
+                try:
+                    self.canvas.delete(card["canvas_id"])
+                except tk.TclError:
+                    pass
+            self._falling_cards = self._falling_cards[:self.RAIN_FALLBACK_CARDS]
+
+        self.canvas.tag_raise("menu_ui")
+        self._rain_job = self.canvas.after(self.RAIN_FRAME_MS, self._run_card_rain)
+
 
 # ============================================================
 # REGION: Main GUI Class
@@ -517,6 +1219,21 @@ class FreeCell_GUI:
 
     SUIT_SYMBOLS = {"H": "♥", "D": "♦", "C": "♣", "S": "♠"}
     FOUNDATION_SLOT_SUITS = ["H", "D", "S", "C"]
+    WINDOW_SIZES = (
+        (1280, 720),
+        (1366, 768),
+        (1600, 900),
+        (1024, 768),
+        (1920, 1080),
+        (2560, 1440),
+        (3840, 2160),
+    )
+    AI_PLAYBACK_FRAMES = 7
+    AI_PLAYBACK_FRAME_MS = 11
+    AI_PLAYBACK_NEXT_MOVE_MS = 90
+    AI_PLAYBACK_EASE_INTENSITY = 1.65
+    UNDO_LEFT_MARGIN = 22
+    UNDO_BOTTOM_MARGIN = 18
 
     BASE_CARD_WIDTH = 72
     BASE_CARD_HEIGHT = 96
@@ -527,11 +1244,14 @@ class FreeCell_GUI:
     BASE_LEFT_MARGIN = 20
     BASE_TOP_MARGIN = 20
     BASE_ROW_GAP = 60
+    GAME_BACKGROUND_FILE = "background.png"
 
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("FreeCell - GUI")
-        self.root.configure(bg="#1f5b3a")
+        self.root.configure(bg="#000000")
+        self.root.resizable(False, False)
+        self._resolution_index = 0
 
         self.state = None
         self.initial_state = None
@@ -549,12 +1269,20 @@ class FreeCell_GUI:
         self._init_hud_vars()
 
         self._build_layout()
+        self._apply_selected_resolution(self.WINDOW_SIZES[self._resolution_index], center=True)
 
         self._menu = MenuScreen(
             self.canvas,
             on_play=self._start_new_random_game_from_menu,
             on_load_test=self._load_test_from_menu,
+            on_set_resolution=self._set_resolution_from_menu,
+            get_resolution_options=self._get_resolution_options,
+            get_current_resolution_label=self._get_current_resolution_label,
+            on_show_menu=self._on_menu_show,
+            on_hide_menu=self._on_menu_hide,
         )
+        mw, mh = self.WINDOW_SIZES[self._resolution_index]
+        self._menu.set_ui_scale(self._ui_scale_for_resolution(mw, mh))
         self._menu.show()
 
     def run(self):
@@ -597,7 +1325,7 @@ class FreeCell_GUI:
             "press_preview_images": [],
             "press_preview_source": None,
         }
-        self._press_hold_ms = 120
+        self._press_hold_ms = 200
 
     def _init_anim_state(self):
         """Initializes animation state variables."""
@@ -607,12 +1335,34 @@ class FreeCell_GUI:
             "overlay_images": [],
         }
         self._click_feedback_active = False
+        self._celebration_active = False
+        self._celebration_seq = 0
+        self._celebration_photo = None
+        
+        # Win sequence state
+        self._win_active = False
+        self._rain_active = False
+        self._fountain_cards = []
+        self._fountain_start = 0
+        self._rain_cards = []
+        self._win_photos = []
+        self._rain_photos = []
+
+        # AI playback state
+        self._ai_playback_active = False
+        self._ai_playback_seq = 0
+        
+        # Move counter and timer
+        self._move_count = 0
+        self._game_start_time = time.time()
 
     def _init_resources(self):
         """Initializes resource paths and caches."""
         self._assets_root = Path(__file__).resolve().parent / "assets"
         self._cards_root = self._assets_root / "Cards"
         self._backgrounds_root = self._assets_root / "Backgrounds"
+        self._fonts_root = self._assets_root / "Fonts"
+        self._game_background_path = self._backgrounds_root / self.GAME_BACKGROUND_FILE
 
         self._card_source_cache = {}
         self._card_photo_cache = {}
@@ -620,20 +1370,28 @@ class FreeCell_GUI:
         self._foundation_placeholder_cache = {}
         self._background_source_cache = {}
         self._background_photo_cache = {}
+        self._popup_title_cache = {}
+        self.card_images = self._card_photo_cache
 
-        self._background_name_to_path = self._discover_backgrounds()
-        self.background_names = list(self._background_name_to_path.keys())
-        self.background_var = tk.StringVar(
-            value=self.background_names[0] if self.background_names else "Solid Green"
-        )
-
-        self._resize_job = None
+        self._resize_timer = None
         self._last_canvas_size = (0, 0)
         self._board_origin_x = 0
         self._board_origin_y = 0
-        self._resolution_scale_hint = self._get_resolution_scale_hint()
-        self._current_scale = self._resolution_scale_hint
-        self._apply_scale_to_layout(self._current_scale)
+
+        # Default to half-size layout on startup before first snap event.
+        self.CARD_WIDTH = 52
+        self.CARD_HEIGHT = 72
+        self.X_SPACING = 14
+        self.Y_SPACING = 20
+        self.BOARD_OFFSET_X = 12
+        self.BOARD_OFFSET_Y = 12
+        self.SLOT_GAP = self.X_SPACING
+        self.STACK_GAP = self.Y_SPACING
+        self.LEFT_MARGIN = self.BOARD_OFFSET_X
+        self.TOP_MARGIN = self.BOARD_OFFSET_Y
+        self.ROW_GAP = 34
+        self.TOP_INNER_GAP_DELTA = 4
+        self.TOP_MIDDLE_EXTRA_GAP = 24
 
     def _init_hud_vars(self):
         """Initializes HUD variables."""
@@ -641,6 +1399,11 @@ class FreeCell_GUI:
         self._hud_buttons = {}
         self._hud_status_id = None
         self._hud_stack_id = None
+        self._hud_timer_id = None
+        self._hud_status_trace_bound = False
+        self._hud_stack_trace_bound = False
+        self._hud_timer_job = None
+        self._hud_undo_window_id = None
         self._hud_deal_entry = None
         self._hud_deal_window_id = None
         self._hud_deal_button_geom = None
@@ -653,33 +1416,168 @@ class FreeCell_GUI:
         """Constructs the main window layout and widgets."""
         self.status_var = tk.StringVar(value="Welcome to FreeCell")
         self.stack_limit_var = tk.StringVar(value="")
+        self.deal_var = tk.StringVar(value="")
+        self.deal_code_var = tk.StringVar(value="DEAL # RANDOM")
+        self._load_panel_fonts()
+
+        self.root.configure(bg="#000000")
 
         width, height = self._current_board_size()
-        main_area = tk.Frame(self.root, bg="#1f5b3a")
-        main_area.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.main_frame = tk.Frame(self.root, bg="#00ff41", padx=3, pady=3)
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
 
-        self.canvas = tk.Canvas(main_area, width=width, height=height, bg="#0f4a2b", highlightthickness=0)
-        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10), pady=0)
-        self.canvas.bind("<Configure>", self._on_canvas_resize, add="+")
+        self.left_panel = tk.Frame(
+            self.main_frame,
+            bg="#0d0f0d",
+            width=220,
+            highlightbackground="#00ff41",
+            highlightthickness=2,
+        )
+        self.left_panel.pack(side=tk.LEFT, fill=tk.Y)
+        self.left_panel.pack_propagate(False)
 
-        algo_panel = tk.Frame(main_area, bg="#174c31", bd=1, relief=tk.FLAT)
-        algo_panel.pack(side=tk.RIGHT, fill=tk.Y)
+        self.game_frame = tk.Frame(self.main_frame, bg="#0d0f0d")
+        self.game_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.canvas = tk.Canvas(self.game_frame, width=width, height=height, bg="#1a3a1a", highlightthickness=0)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
 
         self.foundation_priority_var = tk.BooleanVar(value=True)
+
+        def add_divider(parent):
+            tk.Frame(parent, bg="#1a3d1a", height=2).pack(fill=tk.X, padx=10, pady=5)
+
+        def add_section_label(parent, text):
+            tk.Label(
+                parent,
+                text=text,
+                bg="#0d0f0d",
+                fg="#00a827",
+                font=self._font_px_label,
+                anchor="w",
+                padx=10,
+                justify="left",
+            ).pack(fill=tk.X, pady=(9, 3))
+
+        sidebar_title = self._load_sidebar_title_text()
+        sidebar_title_font = self._fit_ascii_font_to_width(sidebar_title, max_width=196)
+        tk.Label(
+            self.left_panel,
+            text=sidebar_title,
+            bg="#0d0f0d",
+            fg="#00ff41",
+            font=sidebar_title_font,
+            pady=8,
+            padx=8,
+            justify="center",
+        ).pack(fill=tk.X)
+        tk.Label(
+            self.left_panel,
+            textvariable=self.deal_code_var,
+            bg="#0d0f0d",
+            fg="#00a827",
+            font=self._font_px_small,
+            anchor="center",
+            justify="center",
+            pady=2,
+        ).pack(fill=tk.X)
+        self._update_deal_code_label()
+        add_divider(self.left_panel)
+
+        add_section_label(self.left_panel, "NAVIGATION")
+        self._make_panel_btn(self.left_panel, "< BACK TO MENU", self.back_to_menu).pack(fill=tk.X, padx=10, pady=3)
+        add_divider(self.left_panel)
+
+        add_section_label(self.left_panel, "GAME")
+        self._make_panel_btn(self.left_panel, "NEW GAME", self.new_game).pack(fill=tk.X, padx=10, pady=3)
+        self._make_panel_btn(self.left_panel, "RESTART", self.restart_deal).pack(fill=tk.X, padx=10, pady=3)
+        add_divider(self.left_panel)
+
+        add_section_label(self.left_panel, "DEAL")
+        deal_frame = tk.Frame(self.left_panel, bg="#0d0f0d")
+        deal_frame.pack(fill=tk.X, padx=10, pady=3)
+
+        self.deal_entry = tk.Entry(
+            deal_frame,
+            textvariable=self.deal_var,
+            bg="#0d0f0d",
+            fg="#00ff41",
+            insertbackground="#00ff41",
+            font=self._font_px_btn,
+            relief="solid",
+            bd=1,
+            highlightbackground="#00ff41",
+            highlightthickness=1,
+            width=8,
+        )
+        self.deal_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8)
+        self.deal_entry.bind("<Return>", lambda _evt=None: self._load_deal_from_panel())
+
+        self.load_deal_btn = tk.Button(
+            deal_frame,
+            text="LOAD",
+            command=self._load_deal_from_panel,
+            bg="#00ff41",
+            fg="#000000",
+            activebackground="#00a827",
+            activeforeground="#000000",
+            font=self._font_px_btn,
+            relief="solid",
+            bd=1,
+            padx=6,
+            pady=7,
+            cursor="hand2",
+        )
+        self.load_deal_btn.pack(side=tk.LEFT, padx=(6, 0))
+        add_divider(self.left_panel)
+
+        add_section_label(self.left_panel, "SOLVER")
+        self.solver_buttons = {
+            "BFS": self._make_panel_btn(self.left_panel, "BFS", self.solve_with_bfs),
+            "DFS": self._make_panel_btn(self.left_panel, "DFS", self.solve_with_dfs),
+            "UCS": self._make_panel_btn(self.left_panel, "UCS", self.solve_with_ucs),
+            "A*": self._make_panel_btn(self.left_panel, "A*", self.solve_with_astar),
+        }
+        for solver_btn in self.solver_buttons.values():
+            solver_btn.pack(fill=tk.X, padx=10, pady=3)
+
+        fp_frame = tk.Frame(self.left_panel, bg="#0d0f0d")
+        fp_frame.pack(fill=tk.X, padx=10, pady=6)
         tk.Checkbutton(
-            algo_panel, text="Foundation priority", variable=self.foundation_priority_var,
-            onvalue=True, offvalue=False, bg="#174c31", fg="white",
-            activebackground="#174c31", activeforeground="white", selectcolor="#1f5b3a", anchor="w"
-        ).pack(fill=tk.X, padx=10, pady=(10, 6))
+            fp_frame,
+            text="FOUNDATION\nPRIORITY",
+            variable=self.foundation_priority_var,
+            bg="#0d0f0d",
+            fg="#00a827",
+            activebackground="#0d0f0d",
+            activeforeground="#00ff41",
+            selectcolor="#0a2e0a",
+            font=self._font_px_label,
+            anchor="w",
+        ).pack(side=tk.LEFT)
+        add_divider(self.left_panel)
 
-        tk.Label(algo_panel, text="Algorithms", bg="#174c31", fg="white", font=("Segoe UI", 10, "bold"), anchor="w").pack(fill=tk.X, padx=10, pady=(0, 6))
-        tk.Button(algo_panel, text="BFS", command=self.solve_with_bfs, width=14).pack(fill=tk.X, padx=10, pady=4)
-        tk.Button(algo_panel, text="DFS", command=self.solve_with_dfs, width=14).pack(fill=tk.X, padx=10, pady=4)
-        tk.Button(algo_panel, text="UCS", command=self.solve_with_ucs, width=14).pack(fill=tk.X, padx=10, pady=4)
-        tk.Button(algo_panel, text="A*", command=self.solve_with_astar, width=14).pack(fill=tk.X, padx=10, pady=4)
+        self._make_panel_btn(self.left_panel, "EXPORT .TXT", self.export_actions_txt).pack(fill=tk.X, padx=10, pady=3)
 
-        tk.Frame(algo_panel, bg="#174c31").pack(fill=tk.BOTH, expand=True)
-        tk.Button(algo_panel, text="Export Actions (.txt)", command=self.export_actions_txt, width=18).pack(fill=tk.X, padx=10, pady=(10, 10))
+        # Create a frame with white border for the undo button
+        self.undo_frame = tk.Frame(self.root, bg="#ffffff", highlightthickness=0)
+        self.undo_btn = tk.Button(
+            self.undo_frame,
+            text="UNDO",
+            command=self.undo_move,
+            bg="#0d0f0d",
+            fg="#00ff41",
+            activebackground="#0a2e0a",
+            activeforeground="#00ff41",
+            font=self._font_px_btn,
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            padx=22,
+            pady=11,
+            cursor="hand2",
+        )
+        self.undo_btn.pack(padx=1, pady=1)  # 1px white border from frame bg
 
         self.canvas.bind("<ButtonPress-1>", self._on_canvas_press)
         self.canvas.bind("<B1-Motion>", self._on_canvas_drag)
@@ -687,30 +1585,169 @@ class FreeCell_GUI:
 
         self._setup_canvas_hud()
 
-    def _get_resolution_scale_hint(self):
-        """Estimates an initial scale factor based on screen resolution."""
-        screen_w = max(1024, self.root.winfo_screenwidth())
-        screen_h = max(768, self.root.winfo_screenheight())
-        return _clamp(min(screen_w / 1920.0, screen_h / 1080.0), 0.85, 1.35)
+    def _load_panel_fonts(self):
+        """Loads CRT panel fonts with Press Start 2P fallback."""
+        font_path = Path(__file__).resolve().parent / "assets" / "fonts" / "PressStart2P-Regular.ttf"
+        if ctypes is not None and hasattr(ctypes, "windll") and font_path.exists():
+            try:
+                ctypes.windll.gdi32.AddFontResourceW(str(font_path))
+            except Exception:
+                pass
+        try:
+            self._font_px_heading = tkfont.Font(family="Press Start 2P", size=8)
+            self._font_px_btn = tkfont.Font(family="Press Start 2P", size=7)
+            self._font_px_small = tkfont.Font(family="Press Start 2P", size=6)
+            self._font_px_label = tkfont.Font(family="Press Start 2P", size=6)
+        except Exception:
+            self._font_px_heading = tkfont.Font(family="Courier", size=10, weight="bold")
+            self._font_px_btn = tkfont.Font(family="Courier", size=8, weight="bold")
+            self._font_px_small = tkfont.Font(family="Courier", size=7)
+            self._font_px_label = tkfont.Font(family="Courier", size=7)
+        self._font_popup_ascii = tkfont.Font(family="Consolas", size=9, weight="bold")
+        self._font_popup_kv = tkfont.Font(family="Consolas", size=8)
 
-    def _apply_scale_to_layout(self, scale):
-        """Updates UI constants based on the given scale factor."""
-        s = _clamp(scale, 0.58, 1.6)
-        self.CARD_WIDTH = max(50, int(round(self.BASE_CARD_WIDTH * s)))
-        self.CARD_HEIGHT = max(70, int(round(self.BASE_CARD_HEIGHT * s)))
-        self.STACK_GAP = max(14, int(round(self.BASE_STACK_GAP * s)))
-        self.SLOT_GAP = max(14, int(round(self.BASE_SLOT_GAP * s)))
-        self.TOP_INNER_GAP_DELTA = max(0, int(round(self.BASE_TOP_INNER_GAP_DELTA * s)))
-        self.TOP_MIDDLE_EXTRA_GAP = max(0, int(round(self.BASE_TOP_MIDDLE_EXTRA_GAP * s)))
-        self.LEFT_MARGIN = max(12, int(round(self.BASE_LEFT_MARGIN * s)))
-        self.TOP_MARGIN = max(12, int(round(self.BASE_TOP_MARGIN * s)))
-        self.ROW_GAP = max(34, int(round(self.BASE_ROW_GAP * s)))
+    def _load_sidebar_title_text(self):
+        """Loads sidebar title art from FREECELL.txt with fallback text."""
+        title_path = self._fonts_root / "FREECELL.txt"
+        try:
+            text = title_path.read_text(encoding="utf-8").strip("\n")
+        except OSError:
+            text = ""
+        return text if text else "FREECELL"
 
-    def _base_board_size(self):
-        """Returns the unscaled dimensions of the game board."""
-        w = self.BASE_LEFT_MARGIN * 2 + self.BASE_CARD_WIDTH * 8 + self.BASE_SLOT_GAP * 7
-        h = (self.BASE_TOP_MARGIN * 2 + self.BASE_CARD_HEIGHT * 2 + self.BASE_ROW_GAP + 7 * self.BASE_STACK_GAP + 40)
-        return w, h
+    def _fit_ascii_font_to_width(self, text, max_width):
+        """Creates a monospace font sized to fit the ASCII art within max width."""
+        lines = [ln for ln in str(text).splitlines() if ln.strip()]
+        longest = max(lines, key=len) if lines else str(text)
+        for size in range(9, 2, -1):
+            f = tkfont.Font(family="Consolas", size=size, weight="bold")
+            if f.measure(longest) <= max_width:
+                return f
+        return tkfont.Font(family="Consolas", size=3, weight="bold")
+
+    def _update_deal_code_label(self):
+        """Updates sidebar deal code line based on current deal seed."""
+        if not hasattr(self, "deal_code_var") or self.deal_code_var is None:
+            return
+        if self.current_deal_number is None:
+            self.deal_code_var.set("DEAL # RANDOM")
+        else:
+            self.deal_code_var.set(f"DEAL # {self.current_deal_number}")
+
+    def _ui_scale_for_resolution(self, width, height):
+        """Returns UI scaling factor tuned for locked output resolutions."""
+        w = int(width)
+        h = int(height)
+        if w >= 3840 or h >= 2160:
+            return 2.15
+        if w >= 2560 or h >= 1440:
+            return 1.70
+        if w >= 1920 or h >= 1080:
+            return 1.35
+        if w >= 1600 or h >= 900:
+            return 1.18
+        if w >= 1366 or h >= 768:
+            return 1.06
+        if w >= 1280 or h >= 720:
+            return 1.00
+        return 0.92
+
+    def _apply_ui_scale(self, width, height):
+        """Scales sidebar/menu fonts and controls to match active resolution."""
+        scale = self._ui_scale_for_resolution(width, height)
+
+        if hasattr(self, "_font_px_heading") and self._font_px_heading is not None:
+            self._font_px_heading.configure(size=max(7, int(round(8 * scale))))
+        if hasattr(self, "_font_px_btn") and self._font_px_btn is not None:
+            self._font_px_btn.configure(size=max(6, int(round(7 * scale))))
+        if hasattr(self, "_font_px_small") and self._font_px_small is not None:
+            self._font_px_small.configure(size=max(5, int(round(6 * scale))))
+        if hasattr(self, "_font_px_label") and self._font_px_label is not None:
+            self._font_px_label.configure(size=max(5, int(round(6 * scale))))
+        if hasattr(self, "_font_popup_ascii") and self._font_popup_ascii is not None:
+            self._font_popup_ascii.configure(size=max(7, int(round(9 * scale))))
+        if hasattr(self, "_font_popup_kv") and self._font_popup_kv is not None:
+            self._font_popup_kv.configure(size=max(6, int(round(8 * scale))))
+
+        if hasattr(self, "left_panel") and self.left_panel is not None:
+            self.left_panel.configure(width=max(220, int(round(220 * scale))))
+
+        if hasattr(self, "deal_entry") and self.deal_entry is not None:
+            self.deal_entry.configure(width=max(8, int(round(8 * scale))))
+        if hasattr(self, "load_deal_btn") and self.load_deal_btn is not None:
+            self.load_deal_btn.configure(
+                font=self._font_px_btn,
+                padx=max(6, int(round(6 * scale))),
+                pady=max(7, int(round(7 * scale))),
+            )
+
+        if hasattr(self, "undo_btn") and self.undo_btn is not None:
+            self._style_undo_button_like_placeholder()
+
+        if hasattr(self, "_menu") and self._menu is not None:
+            self._menu.set_ui_scale(scale)
+
+    def _make_panel_btn(self, parent, text, command):
+        """Creates a CRT-styled control button for the left panel."""
+        return tk.Button(
+            parent,
+            text=text,
+            command=command,
+            bg="#0d0f0d",
+            fg="#00ff41",
+            activebackground="#0a2e0a",
+            activeforeground="#00ff41",
+            font=self._font_px_btn,
+            relief="solid",
+            bd=1,
+            highlightbackground="#00ff41",
+            highlightthickness=1,
+            anchor="w",
+            padx=12,
+            pady=8,
+            cursor="hand2",
+        )
+
+    def _on_menu_show(self):
+        """Hides gameplay control panels while the menu is visible."""
+        if hasattr(self, "left_panel") and self.left_panel.winfo_manager():
+            self.left_panel.pack_forget()
+
+    def _on_menu_hide(self):
+        """Restores gameplay control panels after leaving the menu."""
+        if hasattr(self, "left_panel") and not self.left_panel.winfo_manager():
+            self.left_panel.pack(side=tk.LEFT, fill=tk.Y, before=self.game_frame)
+        # Let geometry settle, then recompute board/hud positions in one pass.
+        self.root.after_idle(self._sync_layout_after_menu_exit)
+
+    def _sync_layout_after_menu_exit(self):
+        """Re-syncs board origin and HUD positions after menu->game transition."""
+        try:
+            self.root.update_idletasks()
+        except tk.TclError:
+            return
+
+        if self.state is not None:
+            self.render()
+
+        canvas_w = max(1, self.canvas.winfo_width())
+        canvas_h = max(1, self.canvas.winfo_height())
+        self._update_board_origin(canvas_w, canvas_h)
+        self._reposition_hud(canvas_w, canvas_h)
+        self._raise_hud()
+
+    def _is_menu_active(self):
+        """Returns True when menu overlay is currently active."""
+        return bool(self._menu and getattr(self._menu, "_menu_active", False))
+
+    def _get_current_resolution_label(self):
+        """Returns current resolution label for menu display."""
+        w, h = self.WINDOW_SIZES[self._resolution_index]
+        return f"{w}x{h}"
+
+    def _get_resolution_options(self):
+        """Returns fixed resolution labels for dropdown options."""
+        return [f"{w}x{h}" for (w, h) in self.WINDOW_SIZES]
 
     def _current_board_size(self):
         """Returns the current scaled dimensions of the game board."""
@@ -718,16 +1755,180 @@ class FreeCell_GUI:
         h = (self.TOP_MARGIN * 2 + self.CARD_HEIGHT * 2 + self.ROW_GAP + 7 * self.STACK_GAP + 40)
         return w, h
 
-    def _compute_dynamic_scale(self, canvas_w, canvas_h):
-        """Calculates scale factor based on current window size."""
-        base_w, base_h = self._base_board_size()
-        responsive = min(max(100, canvas_w - 24) / base_w, max(100, canvas_h - 24) / base_h)
-        return _clamp((responsive * 0.8) + (self._resolution_scale_hint * 0.2), 0.58, 1.6)
+    def _set_resolution_from_menu(self, label):
+        """Applies selected resolution from dropdown label."""
+        target = str(label).strip()
+        for idx, (w, h) in enumerate(self.WINDOW_SIZES):
+            if target == f"{w}x{h}":
+                self._resolution_index = idx
+                self._apply_selected_resolution((w, h), center=True)
+                return
 
-    def _update_board_origin(self):
-        """Centers the board content within the canvas."""
+    def _center_window_on_screen(self, width, height):
+        """Calculates centered window coordinates on current display."""
+        screen_w = max(1024, self.root.winfo_screenwidth())
+        screen_h = max(768, self.root.winfo_screenheight())
+        x = max(0, (screen_w - int(width)) // 2)
+        y = max(0, (screen_h - int(height)) // 2)
+        return x, y
+
+    def _apply_selected_resolution(self, size, center=False):
+        """Applies selected fixed resolution and refreshes layout once."""
+        w, h = size
+        if center:
+            x, y = self._center_window_on_screen(w, h)
+        else:
+            x, y = self.root.winfo_x(), self.root.winfo_y()
+        self.root.geometry(f"{int(w)}x{int(h)}+{x}+{y}")
+        self.root.update_idletasks()
+        self._apply_fixed_layout(int(w), int(h))
+
+    def _apply_fixed_layout(self, w, h):
+        """Applies one of fixed hardcoded board layouts and redraws immediately."""
+        profiles = {
+            (1024, 768): {
+                "card_w": 56,
+                "card_h": 76,
+                "x_spacing": 14,
+                "y_spacing": 24,
+                "board_x": 14,
+                "board_y": 16,
+                "row_gap": 50,
+                "top_inner_gap": 4,
+                "top_middle_gap": 24,
+                "undo": (20, 748),
+            },
+            (1280, 720): {
+                "card_w": 68,
+                "card_h": 92,
+                "x_spacing": 18,
+                "y_spacing": 26,
+                "board_x": 18,
+                "board_y": 16,
+                "row_gap": 54,
+                "top_inner_gap": 6,
+                "top_middle_gap": 32,
+                "undo": (24, 700),
+            },
+            (1366, 768): {
+                "card_w": 72,
+                "card_h": 96,
+                "x_spacing": 20,
+                "y_spacing": 28,
+                "board_x": 20,
+                "board_y": 18,
+                "row_gap": 56,
+                "top_inner_gap": 6,
+                "top_middle_gap": 36,
+                "undo": (24, 748),
+            },
+            (1600, 900): {
+                "card_w": 82,
+                "card_h": 110,
+                "x_spacing": 24,
+                "y_spacing": 32,
+                "board_x": 26,
+                "board_y": 20,
+                "row_gap": 64,
+                "top_inner_gap": 7,
+                "top_middle_gap": 46,
+                "undo": (28, 880),
+            },
+            (1920, 1080): {
+                "card_w": 96,
+                "card_h": 128,
+                "x_spacing": 30,
+                "y_spacing": 38,
+                "board_x": 34,
+                "board_y": 24,
+                "row_gap": 74,
+                "top_inner_gap": 8,
+                "top_middle_gap": 56,
+                "undo": (30, 1060),
+            },
+            (2560, 1440): {
+                "card_w": 124,
+                "card_h": 166,
+                "x_spacing": 40,
+                "y_spacing": 48,
+                "board_x": 44,
+                "board_y": 26,
+                "row_gap": 88,
+                "top_inner_gap": 10,
+                "top_middle_gap": 70,
+                "undo": (36, 1418),
+            },
+            (3840, 2160): {
+                "card_w": 188,
+                "card_h": 252,
+                "x_spacing": 62,
+                "y_spacing": 74,
+                "board_x": 68,
+                "board_y": 40,
+                "row_gap": 128,
+                "top_inner_gap": 14,
+                "top_middle_gap": 108,
+                "undo": (44, 2134),
+            },
+        }
+        p = profiles.get((w, h), profiles[(1280, 720)])
+
+        self.CARD_WIDTH = p["card_w"]
+        self.CARD_HEIGHT = p["card_h"]
+        self.X_SPACING = p["x_spacing"]
+        self.Y_SPACING = p["y_spacing"]
+        self.BOARD_OFFSET_X = p["board_x"]
+        self.BOARD_OFFSET_Y = p["board_y"]
+
+        self.SLOT_GAP = self.X_SPACING
+        self.STACK_GAP = self.Y_SPACING
+        self.LEFT_MARGIN = self.BOARD_OFFSET_X
+        self.TOP_MARGIN = self.BOARD_OFFSET_Y
+        self.ROW_GAP = p["row_gap"]
+        self.TOP_INNER_GAP_DELTA = p["top_inner_gap"]
+        self.TOP_MIDDLE_EXTRA_GAP = p["top_middle_gap"]
+
+        self._apply_ui_scale(w, h)
+
+        self.card_images.clear()
+        self._card_photo_cache.clear()
+        self._drag_photo_cache.clear()
+        self._foundation_placeholder_cache.clear()
+        self._background_photo_cache.clear()
+
+        self._update_board_origin()
+
         canvas_w = max(1, self.canvas.winfo_width())
         canvas_h = max(1, self.canvas.winfo_height())
+        undo_x, undo_y = self._undo_near_cascade1_position(canvas_w, canvas_h)
+
+        if hasattr(self, "_menu") and self._menu and getattr(self._menu, "_menu_active", False):
+            try:
+                self.canvas.itemconfigure("hud", state="hidden")
+            except tk.TclError:
+                pass
+            self._menu._redraw()
+            if hasattr(self, "_hud_undo_window_id") and self._hud_undo_window_id:
+                try:
+                    self.canvas.coords(self._hud_undo_window_id, undo_x, undo_y)
+                except tk.TclError:
+                    pass
+            return
+
+        if self.state:
+            self.render()
+
+        self._reposition_hud(canvas_w, canvas_h)
+        self._raise_hud()
+
+    def _update_board_origin(self, canvas_w=None, canvas_h=None):
+        """Centers the board content within the canvas."""
+        if canvas_w is None:
+            canvas_w = self.canvas.winfo_width()
+        if canvas_h is None:
+            canvas_h = self.canvas.winfo_height()
+        canvas_w = max(1, int(canvas_w))
+        canvas_h = max(1, int(canvas_h))
         board_w, board_h = self._current_board_size()
         self._board_origin_x = max(0, (canvas_w - board_w) // 2)
         self._board_origin_y = max(0, (canvas_h - board_h) // 2)
@@ -784,9 +1985,9 @@ class FreeCell_GUI:
         self._raise_hud()
 
         if self.state.is_goal_state() and not self.win_announced:
-            self.win_announced = True
             self.status_var.set("You win! All cards moved to foundations.")
-            messagebox.showinfo("FreeCell", "Congratulations! You solved this deal.")
+            self._trigger_win_sequence()
+            return
 
     def _draw_background(self):
         """Draws the background image or fallback fill color."""
@@ -1053,16 +2254,35 @@ class FreeCell_GUI:
     def _setup_canvas_hud(self):
         """Initializes all HUD elements including status text and buttons."""
         if self._hud_status_id is None:
-            self._hud_status_id = self.canvas.create_text(16, 16, anchor="nw", text="", fill="#e0e0e0", font=("Helvetica", 11), tags=("hud",))
+            status_font = self._font_px_small if hasattr(self, "_font_px_small") else ("Helvetica", 11)
+            self._hud_status_id = self.canvas.create_text(16, 16, anchor="nw", text="", fill="#ffffff", font=status_font, tags=("hud",))
             self._hud_ids.append(self._hud_status_id)
-            self.status_var.trace_add("write", lambda *a: self.canvas.itemconfigure(self._hud_status_id, text=self.status_var.get()))
-            self.canvas.itemconfigure(self._hud_status_id, text=self.status_var.get())
+            if not self._hud_status_trace_bound:
+                self.status_var.trace_add("write", lambda *a: self.canvas.itemconfigure(self._hud_status_id, text=self.status_var.get()))
+                self._hud_status_trace_bound = True
+            self.canvas.itemconfigure(self._hud_status_id, text=self.status_var.get(), fill="#ffffff", font=status_font)
 
         if self._hud_stack_id is None:
-            self._hud_stack_id = self.canvas.create_text(16, 40, anchor="nw", text="", fill="#e0e0e0", font=("Helvetica", 11), tags=("hud",))
+            stack_font = self._font_px_small if hasattr(self, "_font_px_small") else ("Helvetica", 11)
+            self._hud_stack_id = self.canvas.create_text(16, 40, anchor="nw", text="", fill="#00a827", font=stack_font, tags=("hud",))
             self._hud_ids.append(self._hud_stack_id)
-            self.stack_limit_var.trace_add("write", lambda *a: self.canvas.itemconfigure(self._hud_stack_id, text=self.stack_limit_var.get()))
-            self.canvas.itemconfigure(self._hud_stack_id, text=self.stack_limit_var.get())
+            if not self._hud_stack_trace_bound:
+                self.stack_limit_var.trace_add("write", lambda *a: self.canvas.itemconfigure(self._hud_stack_id, text=self.stack_limit_var.get()))
+                self._hud_stack_trace_bound = True
+            self.canvas.itemconfigure(self._hud_stack_id, text=self.stack_limit_var.get(), fill="#00a827", font=stack_font)
+
+        if self._hud_timer_id is None:
+            timer_font = self._font_px_small if hasattr(self, "_font_px_small") else ("Helvetica", 10)
+            self._hud_timer_id = self.canvas.create_text(0, 0, anchor="se", text="", fill="#ffffff", font=timer_font, tags=("hud",))
+            self._hud_ids.append(self._hud_timer_id)
+        self._update_hud_timer()
+        if self._hud_timer_job is None:
+            self._schedule_hud_timer_update()
+
+        if self._hud_undo_window_id is None:
+            self._hud_undo_window_id = self.canvas.create_window(16, 16, window=self.undo_frame, anchor="nw", tags=("hud",))
+            self._hud_ids.append(self._hud_undo_window_id)
+        self._style_undo_button_like_placeholder()
 
         self._ensure_hud_buttons()
         self._reposition_hud(max(1, self.canvas.winfo_width()), max(1, self.canvas.winfo_height()))
@@ -1070,33 +2290,22 @@ class FreeCell_GUI:
 
     def _ensure_hud_buttons(self):
         """Creates the HUD buttons if they don't exist yet."""
-        if self._hud_buttons: return
-        base = self._get_background_theme_base()
-        fill = _blend_hex(base, "#000000", 0.70)
-        outline = _blend_hex(base, "#ffffff", 0.18)
-        text_fill = _blend_hex(base, "#ffffff", 0.88)
-
-        cmds = [
-            ("Games", self.new_game),
-            ("Restart", self.restart_deal),
-            ("Undo", self.undo_move),
-            ("Deal", self._toggle_deal_entry),
-            ("Background", self._cycle_background),
-        ]
-
-        for label, cb in cmds:
-            w = max(len(label) * 9 + 48, 48)
-            items = draw_pill_button(self.canvas, 0, 0, w, 36, label, cb, fill=fill, outline=outline, text_fill=text_fill)
-            for item_id in items.values(): self._hud_ids.append(item_id)
-            self._hud_buttons[label.lower()] = {"label": label, "items": items}
+        return
 
     def _reposition_hud(self, canvas_w, canvas_h):
         """Updates positions of HUD elements based on canvas size."""
         if self._hud_stack_id: self.canvas.coords(self._hud_stack_id, 16, 40)
+        if self._hud_timer_id:
+            timer_x = self._top_slot_x(7) + self.CARD_WIDTH
+            timer_y = self._top_row_y() - 6
+            self.canvas.coords(self._hud_timer_id, timer_x, timer_y)
+        if hasattr(self, "_hud_undo_window_id") and self._hud_undo_window_id:
+            undo_x, undo_y = self._undo_near_cascade1_position(canvas_w, canvas_h)
+            self.canvas.coords(self._hud_undo_window_id, undo_x, undo_y)
         cy = canvas_h - 16 - 18
         x_cursor = 16
 
-        for key in ("games", "restart", "undo", "deal", "background"):
+        for key in ():
             btn = self._hud_buttons.get(key)
             if not btn: continue
             label = btn["label"]
@@ -1118,6 +2327,81 @@ class FreeCell_GUI:
                     self.canvas.coords(self._hud_deal_window_id, x1 + 50, cy)
 
             x_cursor += w + 10
+
+    def _schedule_hud_timer_update(self):
+        """Schedules periodic timer refresh so clock advances while idle."""
+        self._hud_timer_job = self.root.after(250, self._hud_timer_tick)
+
+    def _hud_timer_tick(self):
+        """Periodic timer callback."""
+        self._hud_timer_job = None
+        self._update_hud_timer()
+        self._schedule_hud_timer_update()
+
+    def _update_hud_timer(self):
+        """Updates HUD timer text and keeps it aligned to foundation edge."""
+        if self._hud_timer_id is None or self.state is None:
+            return
+        try:
+            self._update_board_origin()
+            timer_x = self._top_slot_x(7) + self.CARD_WIDTH
+            timer_y = self._top_row_y() - 6
+            self.canvas.coords(self._hud_timer_id, timer_x, timer_y)
+            self.canvas.itemconfigure(self._hud_timer_id, text=f"TIME {self._get_elapsed_time()}")
+        except tk.TclError:
+            pass
+
+    def _style_undo_button_like_placeholder(self):
+        """Styles the Undo button to match the empty-slot placeholder look with white border."""
+        base_tint = self._get_background_theme_base()
+        fill = _blend_hex(base_tint, "#ffffff", 0.14)
+        text_fill = _blend_hex(base_tint, "#ffffff", 0.88)
+        active_fill = _blend_hex(base_tint, "#ffffff", 0.22)
+        self.undo_btn.configure(
+            bg=fill,
+            fg=text_fill,
+            activebackground=active_fill,
+            activeforeground=text_fill,
+            font=self._font_px_btn,
+            state="normal",
+            cursor="hand2",
+        )
+
+    def _undo_near_cascade1_position(self, canvas_w, canvas_h):
+        """Returns Undo button position to the left of Cascade 1 with safe spacing."""
+        self.undo_frame.update_idletasks()
+        btn_w = max(1, int(self.undo_frame.winfo_reqwidth()))
+        btn_h = max(1, int(self.undo_frame.winfo_reqheight()))
+
+        # Position to the left of cascade 1 to avoid overlap with active cards.
+        x = int(self._slot_x(0) - btn_w - 20)
+        base_y = self._cascade_row_y() + self.CARD_HEIGHT + int(self.STACK_GAP * 10) + 20
+        y = int(min(max(8, base_y), max(8, canvas_h - btn_h - 18)))
+        return x, y
+
+    def _load_deal_from_panel(self):
+        """Loads a specific deal number from the left panel entry."""
+        raw = (self.deal_var.get() or "").strip()
+        if not raw:
+            self.new_game()
+            return
+        try:
+            self.new_game(deal_number=int(raw))
+        except ValueError:
+            self.status_var.set("Deal number must be an integer.")
+
+    def _highlight_solver(self, active_name):
+        """Highlights the currently running solver button in the panel."""
+        for name, btn in self.solver_buttons.items():
+            if name == active_name:
+                btn.configure(bg="#00ff41", fg="#000000")
+            else:
+                btn.configure(bg="#0d0f0d", fg="#00ff41")
+
+    def _reset_solver_highlight(self):
+        """Restores all solver buttons to idle colors."""
+        for btn in self.solver_buttons.values():
+            btn.configure(bg="#0d0f0d", fg="#00ff41")
 
     def _raise_hud(self):
         """Brings all HUD elements to the top of the display stack."""
@@ -1234,11 +2518,19 @@ class FreeCell_GUI:
             self.root.after(16, self._tick_auto_move_animation)
         else:
             self.canvas.delete(anim["tag"])
+            foundation_card = None
+            foundation_suit = None
+            if anim.get("target_kind") == "foundation" and anim.get("cards"):
+                foundation_card = anim["cards"][0]
+                foundation_suit = anim.get("target_val")
             anim.update({"active": False, "overlay_images": []})
             if anim.get("on_complete"):
                 anim["on_complete"](anim["origin_state"], anim["next_state"], anim["msg"])
             else:
                 self._finalize_auto_move_state(anim["origin_state"], anim["next_state"], anim["msg"])
+            if foundation_card is not None and foundation_suit is not None:
+                fx, fy = self._foundation_slot_center(foundation_suit)
+                self._trigger_foundation_celebration(foundation_card, fx, fy)
 
     def _animate_click_rejection(self, cards, source_kind, source_idx, source_pos):
         """Visualizes a rejected click action (shake effect)."""
@@ -1322,6 +2614,96 @@ class FreeCell_GUI:
 
         tick()
 
+    def _foundation_slot_center(self, suit):
+        """Returns center coordinates of a foundation slot for the given suit."""
+        idx = self.FOUNDATION_SLOT_SUITS.index(suit)
+        x = self._top_slot_x(idx + 4) + (self.CARD_WIDTH / 2)
+        y = self._top_row_y() + (self.CARD_HEIGHT / 2)
+        return x, y
+
+    def _draw_celebration_card(self, card, cx, cy, scale, tilt_deg):
+        """Draws one frame of celebration card transform at center coordinates."""
+        self.canvas.delete("foundation_pop")
+        if not (Image and ImageTk):
+            return
+
+        path = self._card_asset_path(card)
+        if not (path and path.exists()):
+            return
+
+        try:
+            pkey = str(path)
+            if pkey not in self._card_source_cache:
+                self._card_source_cache[pkey] = Image.open(path).convert("RGBA")
+
+            base_w = max(24, int(round(self.CARD_WIDTH * scale)))
+            base_h = max(32, int(round(self.CARD_HEIGHT * scale)))
+            img = self._card_source_cache[pkey].resize((base_w, base_h), Image.LANCZOS)
+            rotated = img.rotate(-tilt_deg, expand=True, resample=Image.BICUBIC)
+            photo = ImageTk.PhotoImage(rotated)
+            self._celebration_photo = photo
+
+            self.canvas.create_image(
+                cx,
+                cy,
+                image=photo,
+                anchor="center",
+                tags=("game", "foundation_pop"),
+            )
+            self.canvas.tag_raise("foundation_pop")
+            self._raise_hud()
+        except Exception:
+            self.canvas.delete("foundation_pop")
+
+    def _trigger_foundation_celebration(self, card, cx, cy):
+        """Runs pop+tilt landing animation for foundation arrivals."""
+        if card is None:
+            return
+
+        if self._celebration_active:
+            return
+
+        self._celebration_active = True
+        self._celebration_seq += 1
+        seq = self._celebration_seq
+
+        scale_up = 1.12
+        tilt_deg = 8.0
+        rise_px = 6.0
+        pop_ms = 90.0
+        settle_ms = 50.0
+        fps_ms = 16
+        start_time = time.time()
+
+        def _animate():
+            if seq != self._celebration_seq:
+                self.canvas.delete("foundation_pop")
+                return
+
+            elapsed = (time.time() - start_time) * 1000.0
+
+            if elapsed <= pop_ms:
+                t = elapsed / pop_ms
+                t = 1 - (1 - t) ** 3
+                scale = 1.0 + (scale_up - 1.0) * t
+                tilt = tilt_deg * t
+                y_off = -rise_px * t
+            elif elapsed <= pop_ms + settle_ms:
+                t = (elapsed - pop_ms) / settle_ms
+                t = t ** 3
+                scale = scale_up - (scale_up - 1.0) * t
+                tilt = tilt_deg * (1 - t)
+                y_off = -rise_px * (1 - t)
+            else:
+                self.canvas.delete("foundation_pop")
+                self._celebration_active = False
+                return
+
+            self._draw_celebration_card(card, cx, cy + y_off, scale, tilt)
+            self.canvas.after(fps_ms, _animate)
+
+        _animate()
+
     def _animate_state_fade(self, to_state, duration=0.22):
         """Perform a crossfade animation between current and target state."""
         start = time.time()
@@ -1375,24 +2757,36 @@ class FreeCell_GUI:
 
         tick()
 
-    def animate_solution(self, path):
+    def animate_solution(self, path, playback_seq=None):
         """Animates a sequence of solution moves."""
+        if playback_seq is None:
+            playback_seq = self._ai_playback_seq
+        if playback_seq != self._ai_playback_seq:
+            return
+
         if not path:
-            self.status_var.set("Completed! AI finished solving this game.")
-            messagebox.showinfo("Completed", "AI finished solving this game!")
+            # All moves done - win condition should have been triggered already
+            if playback_seq == self._ai_playback_seq:
+                self._ai_playback_active = False
             return
 
         move = path.pop(0)
         old_state = self.state.copy()
-        next_state = self._apply_move_object(old_state, move)
+        try:
+            next_state = self._apply_move_object(old_state, move)
+        except Exception as exc:
+            self._ai_playback_active = False
+            self.status_var.set(f"Playback stopped: {exc}")
+            return
         cards, src_kind, src_idx, target_kind, target_val, moved_count = self._build_ai_move_visual(old_state, move)
 
         self.status_var.set(f"AI move: {str(move)}")
 
         if not cards or src_kind is None:
+            self._move_count += 1
             self.state = next_state
             self.render()
-            self.root.after(230, lambda: self.animate_solution(path))
+            self.root.after(self.AI_PLAYBACK_NEXT_MOVE_MS, lambda: self.animate_solution(path, playback_seq))
             return
 
         sx, sy = self._source_card_position(src_kind, src_idx, state=old_state)
@@ -1408,9 +2802,11 @@ class FreeCell_GUI:
         frame = {"i": 0}
 
         def tick():
+            if playback_seq != self._ai_playback_seq:
+                return
             frame["i"] += 1
-            t = frame["i"] / 10
-            ease = 1 - (1 - t) * (1 - t)
+            t = frame["i"] / self.AI_PLAYBACK_FRAMES
+            ease = _ease_in_out_sine_intense(t, self.AI_PLAYBACK_EASE_INTENSITY)
             nx, ny = sx + (tx - sx) * ease, sy + (ty - sy) * ease
 
             self.canvas.delete(tag)
@@ -1438,11 +2834,20 @@ class FreeCell_GUI:
                     self._draw_card(nx, ny + j * self.STACK_GAP, mc, tags=(tag,), lifted=True)
 
             self.canvas.tag_raise(tag)
-            if frame["i"] < 10: self.root.after(16, tick)
+            if frame["i"] < self.AI_PLAYBACK_FRAMES:
+                self.root.after(self.AI_PLAYBACK_FRAME_MS, tick)
             else:
+                if playback_seq != self._ai_playback_seq:
+                    return
+                self._move_count += 1
                 self.state = next_state
                 self.render()
-                self.root.after(170, lambda: self.animate_solution(path))
+                next_delay = self.AI_PLAYBACK_NEXT_MOVE_MS
+                if target_kind == "foundation" and cards:
+                    fx, fy = self._foundation_slot_center(target_val)
+                    self._trigger_foundation_celebration(cards[0], fx, fy)
+                    next_delay = max(next_delay, 220)
+                self.root.after(next_delay, lambda: self.animate_solution(path, playback_seq))
 
         tick()
 
@@ -1477,33 +2882,19 @@ class FreeCell_GUI:
     # ============================================================
 
     def _on_canvas_resize(self, event):
-        """Handles main canvas resize events."""
-        if event.width <= 50 or event.height <= 50: return
-        if self._resize_job: self.root.after_cancel(self._resize_job)
-        self._resize_job = self.root.after(70, lambda: self._handle_resize(event.width, event.height))
-        self._raise_hud()
+        """Legacy hook retained for compatibility; resizing is root-driven."""
+        if event.widget is self.canvas:
+            self._reposition_hud(max(1, event.width), max(1, event.height))
+            self._raise_hud()
 
     def _handle_resize(self, width, height):
-        """Re-scales the board layout to fit new dimensions."""
-        self._resize_job = None
-        if (width, height) == self._last_canvas_size: return
-        
-        orig_size = (self.CARD_WIDTH, self.CARD_HEIGHT)
-        self._apply_scale_to_layout(self._compute_dynamic_scale(width, height))
-        self._last_canvas_size = (width, height)
-        
-        if (self.CARD_WIDTH, self.CARD_HEIGHT) != orig_size:
-            self._card_photo_cache.clear()
-            self._foundation_placeholder_cache.clear()
-        
-        self._background_photo_cache.clear()
-        self._update_board_origin()
-        if self.state: self.render()
-        self._reposition_hud(width, height)
-        self._raise_hud()
+        """Legacy hook retained for compatibility; fixed-layout snapping is root-driven."""
+        _ = (width, height)
 
     def _on_canvas_press(self, event):
         """Handles mouse press events on the canvas."""
+        if self._is_menu_active():
+            return
         try:
             if self.canvas.find_withtag("current") and "hud" in self.canvas.gettags(self.canvas.find_withtag("current")[0]): return
         except tk.TclError: pass
@@ -1527,6 +2918,8 @@ class FreeCell_GUI:
 
     def _on_canvas_drag(self, event):
         """Handles mouse motion events (dragging) on the canvas."""
+        if self._is_menu_active():
+            return
         if not self.state or self.auto_move_anim["active"] or self._click_feedback_active: return
         
         if self.pointer_input["active"]:
@@ -1541,6 +2934,8 @@ class FreeCell_GUI:
 
     def _on_canvas_release(self, event):
         """Handles mouse release events on the canvas."""
+        if self._is_menu_active():
+            return
         try:
             if self.canvas.find_withtag("current") and "hud" in self.canvas.gettags(self.canvas.find_withtag("current")[0]): return
         except tk.TclError: pass
@@ -1574,11 +2969,19 @@ class FreeCell_GUI:
         try:
             next_state, msg = self._apply_drop_move(tkind, tval)
             tx, ty = self._target_card_position_after_move(next_state, tkind, tval, self.drag["count"])
+            moved_card = self.drag["card"]
             
             effect = "foundation_snap" if tkind == "foundation" else None
             steps = 22 if effect else 10 # Slower for effect
-            
-            self._animate_drag_to(tx, ty, lambda: [self._clear_drag(), self._set_state_if_valid(next_state, msg)], steps=steps, interval_ms=12, effect=effect)
+
+            def _on_drop_done():
+                self._clear_drag()
+                self._set_state_if_valid(next_state, msg)
+                if tkind == "foundation" and moved_card is not None:
+                    fx, fy = self._foundation_slot_center(tval)
+                    self._trigger_foundation_celebration(moved_card, fx, fy)
+
+            self._animate_drag_to(tx, ty, _on_drop_done, steps=steps, interval_ms=12, effect=effect)
         except ValueError:
             self._animate_drag_to(self.drag["origin_x"], self.drag["origin_y"], lambda: [self._clear_drag(), self.status_var.set("Invalid move."), self.render()])
 
@@ -1651,18 +3054,53 @@ class FreeCell_GUI:
 
     def new_game(self, deal_number=None):
         """Starts a new game with the specified deal number or random."""
-        self.current_deal_number = deal_number
-        self.state = FreeCell.create_initial_state(deal_number=deal_number)
+        self._cancel_ai_playback()
+        self._dismiss_win()
+        self.canvas.delete("solver_popup")
+        effective_deal = deal_number if deal_number is not None else random.randint(1, 2_147_483_647)
+        self.current_deal_number = int(effective_deal)
+        self._update_deal_code_label()
+        self.deal_var.set(str(self.current_deal_number))
+        self.state = FreeCell.create_initial_state(deal_number=self.current_deal_number)
         self.initial_state = self.state.copy()
         self.selection = None
         self.history = []
         self.win_announced = False
+        self._move_count = 0
+        self._game_start_time = time.time()
         moved = self._auto_move_to_foundation_internal()
-        label = "random" if deal_number is None else str(deal_number)
+        label = str(self.current_deal_number)
         msg = f"New game started (deal {label})." + (f" Auto-moved {moved} to foundation." if moved else "")
         self.status_var.set(msg)
         self.render()
         self._setup_canvas_hud()
+
+    def back_to_menu(self):
+        """Shows the main menu overlay from the in-game layout."""
+        self._cancel_ai_playback()
+        self._reset_pointer_input()
+        if self.drag.get("active"):
+            self._clear_drag()
+        try:
+            self.canvas.delete("drag_overlay")
+            self.canvas.delete("click_reject")
+        except tk.TclError:
+            pass
+
+        if self._menu is None:
+            self._menu = MenuScreen(
+                self.canvas,
+                on_play=self._start_new_random_game_from_menu,
+                on_load_test=self._load_test_from_menu,
+                on_set_resolution=self._set_resolution_from_menu,
+                get_resolution_options=self._get_resolution_options,
+                get_current_resolution_label=self._get_current_resolution_label,
+                on_show_menu=self._on_menu_show,
+                on_hide_menu=self._on_menu_hide,
+            )
+            cw, ch = self.WINDOW_SIZES[self._resolution_index]
+            self._menu.set_ui_scale(self._ui_scale_for_resolution(cw, ch))
+        self._menu.show()
 
     def new_game_from_entry(self):
         """Displays the deal entry field to start a specific deal."""
@@ -1671,10 +3109,16 @@ class FreeCell_GUI:
     def restart_deal(self):
         """Restarts the current deal from the initial state."""
         if not self.initial_state: return
+        self._cancel_ai_playback()
+        self._dismiss_win()
+        self.canvas.delete("solver_popup")
+        self._update_deal_code_label()
         self.state = self.initial_state.copy()
         self.selection = None
         self.history = []
         self.win_announced = False
+        self._move_count = 0
+        self._game_start_time = time.time()
         moved = self._auto_move_to_foundation_internal()
         self.status_var.set("Deal restarted.")
         self.render()
@@ -1687,38 +3131,17 @@ class FreeCell_GUI:
         prev = self.history.pop()
         self.state = prev
         self.selection = None
+        self._move_count = max(0, self._move_count - 1)
         self.status_var.set("Move undone.")
         self.render()
         # self._animate_state_fade(prev)
-
-    def _cycle_background(self):
-        """Rotates through available background themes."""
-        if not self.background_names: return
-        idx = 0
-        try: idx = self.background_names.index(self.background_var.get())
-        except ValueError: pass
-        
-        self.background_var.set(self.background_names[(idx + 1) % len(self.background_names)])
-        self._background_photo_cache.clear()
-        
-        # Reset HUD
-        for i in self._hud_ids: self.canvas.delete(i)
-        self._hud_ids.clear()
-        self._hud_buttons.clear()
-        self._hud_status_id = None
-        self._hud_stack_id = None
-        self._hide_deal_entry()
-        self._hud_deal_entry = None
-        
-        self.render()
-        self._setup_canvas_hud()
 
     def _start_new_random_game_from_menu(self):
         if self._menu:
             self._menu.hide()
             self._menu = None
         self.new_game()
-        self._setup_canvas_hud()
+        self.root.after_idle(self._sync_layout_after_menu_exit)
 
     def _load_test_from_menu(self, test_number):
         if self._menu:
@@ -1727,6 +3150,7 @@ class FreeCell_GUI:
         if test_number == 1: self._load_test_1()
         elif test_number == 2: self._load_test_2()
         else: self.new_game()
+        self.root.after_idle(self._sync_layout_after_menu_exit)
 
     def _load_test_1(self):
         # Placeholder for test case 1
@@ -1736,16 +3160,593 @@ class FreeCell_GUI:
         # Placeholder for test case 2
         self.new_game()
 
+    # ============================================================
+    # REGION: Win Sequence & Popups
+    # ============================================================
+
+    def _get_foundation_slot_center(self, suit_idx):
+        """Returns the center coordinates of a foundation slot by suit index (0-3)."""
+        x = self._top_slot_x(suit_idx + 4)
+        y = self._top_row_y()
+        return int(x + self.CARD_WIDTH // 2), int(y + self.CARD_HEIGHT // 2)
+
+    def _get_elapsed_time(self):
+        """Returns formatted elapsed time string (MM:SS)."""
+        s = int(time.time() - self._game_start_time)
+        return f"{s//60:02d}:{s%60:02d}"
+
+    def _cancel_ai_playback(self):
+        """Invalidates pending AI playback callbacks and clears playback overlay."""
+        self._ai_playback_active = False
+        self._ai_playback_seq += 1
+        try:
+            self.canvas.delete("ai_move_card")
+        except tk.TclError:
+            pass
+
+    def _popup_width_for_cascades(self, canvas_w):
+        """Returns popup width matching the full span of 8 cascade slots."""
+        cascades_span = self.CARD_WIDTH * 8 + self.SLOT_GAP * 7
+        return max(360, min(canvas_w - 24, cascades_span))
+
+    def _popup_spacing(self, canvas_w, canvas_h):
+        """Returns resolution-aware spacing metrics for popup layout."""
+        scale = self._ui_scale_for_resolution(canvas_w, canvas_h)
+        return {
+            "edge_margin": max(12, int(round(12 * scale))),
+            "top_pad": max(18, int(round(18 * scale))),
+            "content_nudge": max(40, int(round(40 * scale))),
+            "section_gap": max(14, int(round(14 * scale))),
+            "row_gap": max(20, int(round(20 * scale))),
+            "row_gap_tight": max(16, int(round(16 * scale))),
+            "button_half_h": max(14, int(round(14 * scale))),
+            "button_bottom_pad": max(22, int(round(22 * scale))),
+        }
+
+    def _popup_safe_button_y(self, y0, y1, content_bottom, spacing):
+        """Places popup buttons below content while keeping them inside panel bounds."""
+        min_y = y0 + spacing["top_pad"] + spacing["button_half_h"]
+        max_y = y1 - spacing["button_bottom_pad"] - spacing["button_half_h"]
+        desired = content_bottom + spacing["section_gap"] + spacing["button_half_h"]
+        return max(min_y, min(max_y, desired))
+
+    def _draw_centered_colon_row(self, cx, y, label, value, fill, font, tags):
+        """Draws a key/value row so the ':' is aligned at the popup center."""
+        self.canvas.create_text(cx - 6, y, text=str(label), fill=fill, font=font, anchor="e", tags=tags)
+        self.canvas.create_text(cx, y, text=":", fill=fill, font=font, anchor="center", tags=tags)
+        self.canvas.create_text(cx + 6, y, text=str(value), fill=fill, font=font, anchor="w", tags=tags)
+
+    def _load_popup_ascii_title(self, filename, fallback_text):
+        """Loads ASCII title text from assets/Fonts, with fallback when missing."""
+        key = filename.upper()
+        if key in self._popup_title_cache:
+            return self._popup_title_cache[key]
+
+        title_path = self._fonts_root / filename
+        try:
+            text = title_path.read_text(encoding="utf-8").strip("\n")
+        except OSError:
+            text = ""
+
+        final_text = text if text else fallback_text
+        self._popup_title_cache[key] = final_text
+        return final_text
+
+    def _solver_ascii_filename(self, algorithm, solved):
+        """Maps solver labels to popup ASCII title files."""
+        algo_key = {"A*": "ASTAR", "BFS": "BFS", "DFS": "DFS", "UCS": "UCS"}.get(algorithm, str(algorithm).upper())
+        suffix = "FINISHED" if solved else "FAILED"
+        return f"{algo_key}_{suffix}.txt"
+
+    def _trigger_win_sequence(self):
+        """Shows the You Win popup first."""
+        if self._win_active:
+            return
+        self._win_active = True
+        self.win_announced = True
+        self._show_win_popup()
+
+    def _new_game_after_animation(self):
+        """Starts a new game after fountain/rain animation completes (~4.5 seconds)."""
+        self.root.after(4500, self.new_game)
+
+    def _restart_after_animation(self):
+        """Restarts current deal after fountain/rain animation completes (~4.5 seconds)."""
+        self.root.after(4500, self.restart_deal)
+
+    def _trigger_fountain_explosion(self):
+        """Legacy no-op: win fountain/rain animation has been removed."""
+        self._rain_active = False
+        self._fountain_cards = []
+        self.canvas.delete("fountain")
+        self.canvas.delete("win_rain")
+
+    def _run_fountain(self):
+        """Animates foundation cards launching upward as a fountain."""
+        if not self._win_active:
+            return
+
+        W = max(1, self.canvas.winfo_width())
+        H = max(1, self.canvas.winfo_height())
+        now = (time.time() - self._fountain_start) * 1000
+        all_exited = True
+
+        self.canvas.delete("fountain")
+
+        for fc in self._fountain_cards:
+            if now < fc["delay"]:
+                all_exited = False
+                continue
+
+            if fc["exited"]:
+                continue
+
+            fc["vy"] += 0.4
+            fc["x"] += fc["vx"]
+            fc["y"] += fc["vy"]
+            fc["tilt"] += fc["tilt_speed"]
+
+            if fc["y"] < -self.CARD_HEIGHT:
+                fc["exited"] = True
+                continue
+
+            all_exited = False
+
+            try:
+                suit_folder = {"H": "heart", "D": "diamond", "C": "club", "S": "spade"}[fc["suit"]]
+                path = self._cards_root / suit_folder / f"{fc['rank']}_{suit_folder}.png"
+                if not path.exists():
+                    continue
+                img = Image.open(str(path))
+                img = img.resize((self.CARD_WIDTH, self.CARD_HEIGHT), Image.LANCZOS)
+                img = img.rotate(fc["tilt"], expand=True, resample=Image.BICUBIC)
+                photo = ImageTk.PhotoImage(img)
+                self._win_photos.append(photo)
+                if len(self._win_photos) > 120:
+                    self._win_photos = self._win_photos[-60:]
+
+                self.canvas.create_image(
+                    fc["x"], fc["y"],
+                    image=photo, anchor="center",
+                    tags="fountain"
+                )
+            except Exception:
+                pass
+
+        if all_exited:
+            self.canvas.delete("fountain")
+            self.root.after(100, self._start_win_card_rain)
+            return
+
+        self.canvas.after(16, self._run_fountain)
+
+    def _start_win_card_rain(self):
+        """Legacy no-op: win rain animation has been removed."""
+        self._rain_active = False
+        self._rain_cards = []
+        self.canvas.delete("win_rain")
+
+    def _spawn_win_card(self, canvas_w, canvas_h, delay_frames=0):
+        """Creates a falling card for win sequence (simpler version of menu's _spawn_card)."""
+        CARD_SUITS = ["diamond", "heart", "club", "spade"]
+        CARD_RANKS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"]
+        
+        suit = random.choice(CARD_SUITS)
+        rank = random.choice(CARD_RANKS)
+
+        scale = random.uniform(0.70, 1.35)
+        card_w = max(28, int(round(60 * scale)))
+        card_h = max(40, int(round(84 * scale)))
+
+        path = self._cards_root / suit / f"{rank}_{suit}.png"
+        if Image is not None:
+            try:
+                img = Image.open(str(path)).resize((card_w, card_h), Image.LANCZOS)
+            except Exception:
+                img = Image.new("RGB", (card_w, card_h), "#ffffff")
+        else:
+            img = None
+
+        spin_dir = random.choice((-1.0, 1.0))
+        return {
+            "suit": suit,
+            "rank": rank,
+            "img_base": img,
+            "photo": None,
+            "canvas_id": None,
+            "w": card_w,
+            "h": card_h,
+            "x": random.randint(card_w, canvas_w - card_w),
+            "y": random.randint(-canvas_h * 2, -card_h),
+            "vy": random.uniform(0.1, 0.35),
+            "angle": random.uniform(-18.0, 18.0),
+            "spin_speed": spin_dir * random.uniform(0.03, 0.10),
+            "spin_accel": spin_dir * 0.0012,
+            "delay": int(max(0, delay_frames)),
+            "active": delay_frames == 0,
+        }
+
+    def _run_win_rain(self):
+        """Animates falling card rain (reuses menu-style animation)."""
+        if not self._rain_active:
+            self.canvas.delete("win_rain")
+            return
+
+        W = max(1, self.canvas.winfo_width())
+        H = max(1, self.canvas.winfo_height())
+
+        for idx, card in enumerate(self._rain_cards):
+            if card["delay"] > 0:
+                card["delay"] -= 1
+                continue
+
+            if not card["active"]:
+                card["active"] = True
+
+            # Physics: gravity and terminal velocity
+            fall_progress = _clamp(card["y"] / max(1, H), 0.0, 1.0)
+            accel_mult = 1.0 + (0.35 * fall_progress)
+            card["vy"] = min(card["vy"] + (0.035 * accel_mult), 2.4)
+            card["y"] += card["vy"]
+
+            # Rotation
+            card["spin_speed"] += card["spin_accel"]
+            card["angle"] += card["spin_speed"]
+
+            # Render rotated card
+            photo = None
+            if ImageTk is not None and card["img_base"] is not None:
+                try:
+                    rotated = card["img_base"].rotate(card["angle"], expand=True, resample=Image.BICUBIC)
+                    photo = ImageTk.PhotoImage(rotated)
+                except Exception:
+                    pass
+
+            if photo is not None:
+                card["photo"] = photo
+                self._rain_photos.append(photo)
+                if len(self._rain_photos) > 56:
+                    self._rain_photos = self._rain_photos[-28:]
+                try:
+                    self.canvas.itemconfig(card["canvas_id"], image=photo)
+                except tk.TclError:
+                    pass
+
+            try:
+                self.canvas.coords(card["canvas_id"], card["x"], card["y"])
+            except tk.TclError:
+                pass
+
+            # Respawn at top when exits bottom
+            if card["y"] > H + card["h"]:
+                new_card = self._spawn_win_card(W, H, delay_frames=0)
+                new_card["canvas_id"] = card["canvas_id"]
+                self._rain_cards[idx] = new_card
+
+        self.canvas.tag_raise("win_popup")
+        self.canvas.after(20, self._run_win_rain)
+
+    def _show_win_popup(self):
+        """Draws the You Win popup panel over the card rain."""
+        W = max(1, self.canvas.winfo_width())
+        H = max(1, self.canvas.winfo_height())
+        spacing = self._popup_spacing(W, H)
+        cx, cy = W // 2, H // 2
+
+        title_text = self._load_popup_ascii_title("YOUWIN.txt", "YOU WIN!")
+        title_lines = max(1, title_text.count("\n") + 1)
+        try:
+            line_h = max(12, int(self._font_popup_ascii.metrics("linespace")))
+        except Exception:
+            line_h = 14
+        try:
+            kv_line_h = max(12, int(self._font_popup_kv.metrics("linespace")))
+        except Exception:
+            kv_line_h = 14
+        try:
+            label_line_h = max(12, int(self._font_px_label.metrics("linespace")))
+        except Exception:
+            label_line_h = 14
+        title_h = line_h * title_lines
+
+        PW = self._popup_width_for_cascades(W)
+        required_h = (
+            spacing["top_pad"] + spacing["content_nudge"] + title_h + spacing["section_gap"]
+            + (kv_line_h * 2) + spacing["row_gap"]
+            + label_line_h + spacing["section_gap"]
+            + (spacing["button_half_h"] * 2)
+            + spacing["button_bottom_pad"] + spacing["top_pad"]
+        )
+        PH = min(H - (spacing["edge_margin"] * 2), max(360, required_h))
+        x0, y0 = cx - PW // 2, cy - PH // 2
+        x1, y1 = cx + PW // 2, cy + PH // 2
+
+        self.canvas.create_rectangle(0, 0, W, H,
+            fill="#000000", stipple="gray50",
+            tags="win_popup"
+        )
+
+        self.canvas.create_rectangle(x0, y0, x1, y1,
+            fill="#0d0f0d", outline="#00ff41",
+            width=3, tags="win_popup"
+        )
+
+        title_y = y0 + spacing["top_pad"] + spacing["content_nudge"]
+        title_id = self.canvas.create_text(cx, title_y,
+            text=title_text,
+            fill="#00ff41", font=self._font_popup_ascii,
+            anchor="n", justify="center", tags="win_popup"
+        )
+
+        moves = self._move_count
+        elapsed = self._get_elapsed_time()
+        title_box = self.canvas.bbox(title_id)
+        title_bottom = title_box[3] if title_box else (title_y + title_h)
+        stats_y = title_bottom + spacing["section_gap"]
+        self._draw_centered_colon_row(
+            cx, stats_y, "MOVES", moves, "#00a827", self._font_popup_kv, "win_popup"
+        )
+        self._draw_centered_colon_row(
+            cx, stats_y + spacing["row_gap"], "TIME", elapsed, "#00a827", self._font_popup_kv, "win_popup"
+        )
+
+        prompt_y = stats_y + (spacing["row_gap"] * 2)
+        self.canvas.create_text(cx, prompt_y,
+            text="Choose what to do next:",
+            fill="#00a827", font=self._font_px_label,
+            anchor="center", tags="win_popup"
+        )
+
+        content_bottom = prompt_y + (label_line_h // 2)
+        btn_y = self._popup_safe_button_y(y0, y1, content_bottom, spacing)
+
+        btn_half_h = spacing["button_half_h"]
+        btn_w = max(96, int(round(112 * self._ui_scale_for_resolution(W, H))))
+        btn_gap = max(20, int(round(20 * self._ui_scale_for_resolution(W, H))))
+
+        ng_x0, ng_x1 = cx - btn_gap - btn_w, cx - btn_gap
+        ng_rect = self.canvas.create_rectangle(
+            ng_x0, btn_y - btn_half_h, ng_x1, btn_y + btn_half_h,
+            fill="#0d0f0d", outline="#00ff41",
+            width=2, tags="win_popup"
+        )
+        ng_text = self.canvas.create_text(
+            (ng_x0 + ng_x1) // 2, btn_y,
+            text="RESTART",
+            fill="#00ff41", font=self._font_px_btn,
+            anchor="center", tags="win_popup"
+        )
+
+        mn_x0, mn_x1 = cx + btn_gap, cx + btn_gap + btn_w
+        mn_rect = self.canvas.create_rectangle(
+            mn_x0, btn_y - btn_half_h, mn_x1, btn_y + btn_half_h,
+            fill="#00ff41", outline="#00ff41",
+            width=2, tags="win_popup"
+        )
+        mn_text = self.canvas.create_text(
+            (mn_x0 + mn_x1) // 2, btn_y,
+            text="NEW GAME",
+            fill="#000000", font=self._font_px_btn,
+            anchor="center", tags="win_popup"
+        )
+
+        def _restart():
+            self._dismiss_win()
+            self.restart_deal()
+
+        def _new_game():
+            self._dismiss_win()
+            self.new_game()
+
+        for item in [ng_rect, ng_text]:
+            self.canvas.tag_bind(item, "<ButtonRelease-1>", lambda e: _restart())
+            self.canvas.tag_bind(item, "<Enter>", lambda e: self.canvas.config(cursor="hand2"))
+            self.canvas.tag_bind(item, "<Leave>", lambda e: self.canvas.config(cursor=""))
+
+        for item in [mn_rect, mn_text]:
+            self.canvas.tag_bind(item, "<ButtonRelease-1>", lambda e: _new_game())
+            self.canvas.tag_bind(item, "<Enter>", lambda e: self.canvas.config(cursor="hand2"))
+            self.canvas.tag_bind(item, "<Leave>", lambda e: self.canvas.config(cursor=""))
+
+    def _dismiss_win(self):
+        """Cleans up win sequence and popups."""
+        self._win_active = False
+        self._rain_active = False
+        self._win_photos = []
+        self._rain_photos = []
+        self.canvas.delete("win_popup")
+        self.canvas.delete("win_rain")
+        self.canvas.delete("fountain")
+
+    def show_no_solution_popup(self, algorithm, nodes_explored, time_taken):
+        """Shows a red error popup when solver finds no solution."""
+        W = max(1, self.canvas.winfo_width())
+        H = max(1, self.canvas.winfo_height())
+        spacing = self._popup_spacing(W, H)
+
+        title_text = self._load_popup_ascii_title(
+            self._solver_ascii_filename(algorithm, solved=False),
+            f"{algorithm} FAILED",
+        )
+        title_lines = max(1, title_text.count("\n") + 1)
+        try:
+            line_h = max(12, int(self._font_popup_ascii.metrics("linespace")))
+        except Exception:
+            line_h = 14
+        try:
+            kv_line_h = max(12, int(self._font_popup_kv.metrics("linespace")))
+        except Exception:
+            kv_line_h = 14
+        try:
+            label_line_h = max(12, int(self._font_px_label.metrics("linespace")))
+        except Exception:
+            label_line_h = 14
+        title_h = line_h * title_lines
+
+        PW = self._popup_width_for_cascades(W)
+        required_h = (
+            spacing["top_pad"] + spacing["content_nudge"] + title_h + spacing["section_gap"]
+            + label_line_h + spacing["row_gap_tight"]
+            + (kv_line_h * 2) + spacing["section_gap"]
+            + (spacing["button_half_h"] * 2)
+            + spacing["button_bottom_pad"] + spacing["top_pad"]
+        )
+        PH = min(H - (spacing["edge_margin"] * 2), max(340, required_h))
+        x0 = W // 2 - PW // 2
+        y0 = H // 2 - PH // 2
+        x1, y1 = x0 + PW, y0 + PH
+        cx = (x0 + x1) // 2
+
+        self.canvas.create_rectangle(x0, y0, x1, y1,
+            fill="#0d0f0d", outline="#ff3300",
+            width=3, tags="solver_popup"
+        )
+        title_y = y0 + spacing["top_pad"] + spacing["content_nudge"]
+        title_id = self.canvas.create_text(cx, title_y,
+            text=title_text,
+            fill="#ff3300", font=self._font_popup_ascii,
+            anchor="n", justify="center", tags="solver_popup"
+        )
+        title_box = self.canvas.bbox(title_id)
+        title_bottom = title_box[3] if title_box else (title_y + title_h)
+        body_y = title_bottom + spacing["section_gap"]
+        self.canvas.create_text(cx, body_y,
+            text=f"{algorithm} found no path",
+            fill="#cc2200", font=self._font_px_label,
+            anchor="center", tags="solver_popup"
+        )
+        self._draw_centered_colon_row(
+            cx, body_y + spacing["row_gap_tight"], "NODES", f"{nodes_explored:,}", "#cc2200", self._font_popup_kv, "solver_popup"
+        )
+        self._draw_centered_colon_row(
+            cx, body_y + spacing["row_gap_tight"] * 2, "TIME", f"{time_taken:.2f}s", "#cc2200", self._font_popup_kv, "solver_popup"
+        )
+
+        content_bottom = body_y + (spacing["row_gap_tight"] * 2) + (kv_line_h // 2)
+        btn_y = self._popup_safe_button_y(y0, y1, content_bottom, spacing)
+        btn = self.canvas.create_rectangle(
+            cx - 70, btn_y - spacing["button_half_h"], cx + 70, btn_y + spacing["button_half_h"],
+            fill="#ff3300", outline="#ff3300",
+            width=2, tags="solver_popup"
+        )
+        btn_t = self.canvas.create_text(cx, btn_y,
+            text="DISMISS",
+            fill="#000000", font=self._font_px_label,
+            anchor="center", tags="solver_popup"
+        )
+        for item in [btn, btn_t]:
+            self.canvas.tag_bind(item, "<ButtonRelease-1>",
+                lambda e: self.canvas.delete("solver_popup"))
+            self.canvas.tag_bind(item, "<Enter>",
+                lambda e: self.canvas.config(cursor="hand2"))
+            self.canvas.tag_bind(item, "<Leave>",
+                lambda e: self.canvas.config(cursor=""))
+
+        self.canvas.tag_raise("solver_popup")
+
+    def show_solver_stats_popup(self, algorithm, moves, time_taken, nodes_explored):
+        """Shows solver stats panel during/after AI playback."""
+        W = max(1, self.canvas.winfo_width())
+        H = max(1, self.canvas.winfo_height())
+        spacing = self._popup_spacing(W, H)
+
+        title_text = self._load_popup_ascii_title(
+            self._solver_ascii_filename(algorithm, solved=True),
+            f"{algorithm} FINISHED",
+        )
+        title_lines = max(1, title_text.count("\n") + 1)
+        try:
+            line_h = max(12, int(self._font_popup_ascii.metrics("linespace")))
+        except Exception:
+            line_h = 14
+        try:
+            kv_line_h = max(12, int(self._font_popup_kv.metrics("linespace")))
+        except Exception:
+            kv_line_h = 14
+        title_h = line_h * title_lines
+
+        PW = self._popup_width_for_cascades(W)
+        required_h = (
+            spacing["top_pad"] + spacing["content_nudge"] + title_h + spacing["section_gap"]
+            + kv_line_h + (spacing["row_gap_tight"] * 3) + spacing["section_gap"]
+            + (spacing["button_half_h"] * 2)
+            + spacing["button_bottom_pad"] + spacing["top_pad"]
+        )
+        PH = min(H - (spacing["edge_margin"] * 2), max(360, required_h))
+        x0 = W // 2 - PW // 2
+        y0 = H // 2 - PH // 2
+        x1, y1 = x0 + PW, y0 + PH
+        cx = (x0 + x1) // 2
+
+        self.canvas.create_rectangle(x0, y0, x1, y1,
+            fill="#0d0f0d", outline="#ffee00",
+            width=3, tags="solver_popup"
+        )
+        title_y = y0 + spacing["top_pad"] + spacing["content_nudge"]
+        title_id = self.canvas.create_text(cx, title_y,
+            text=title_text,
+            fill="#ffee00", font=self._font_popup_ascii,
+            anchor="n", justify="center", tags="solver_popup"
+        )
+
+        title_box = self.canvas.bbox(title_id)
+        title_bottom = title_box[3] if title_box else (title_y + title_h)
+        stats_y = title_bottom + spacing["section_gap"]
+        self._draw_centered_colon_row(
+            cx, stats_y, "ALGORITHM", algorithm, "#ba7517", self._font_popup_kv, "solver_popup"
+        )
+        self._draw_centered_colon_row(
+            cx, stats_y + spacing["row_gap_tight"], "MOVES", moves, "#ba7517", self._font_popup_kv, "solver_popup"
+        )
+        self._draw_centered_colon_row(
+            cx, stats_y + spacing["row_gap_tight"] * 2, "TIME", f"{time_taken:.2f}s", "#ba7517", self._font_popup_kv, "solver_popup"
+        )
+        self._draw_centered_colon_row(
+            cx, stats_y + spacing["row_gap_tight"] * 3, "NODES", f"{nodes_explored:,}", "#ba7517", self._font_popup_kv, "solver_popup"
+        )
+
+        content_bottom = stats_y + (spacing["row_gap_tight"] * 3) + (kv_line_h // 2)
+        btn_y = self._popup_safe_button_y(y0, y1, content_bottom, spacing)
+        btn = self.canvas.create_rectangle(
+            cx - 50, btn_y - spacing["button_half_h"], cx + 50, btn_y + spacing["button_half_h"],
+            fill="#ffee00", outline="#ffee00",
+            width=2, tags="solver_popup"
+        )
+        btn_t = self.canvas.create_text(cx, btn_y,
+            text="OK",
+            fill="#000000", font=self._font_px_label,
+            anchor="center", tags="solver_popup"
+        )
+        def _on_solver_ok():
+            if self._ai_playback_active:
+                return
+            self.canvas.delete("solver_popup")
+            self._ai_playback_active = True
+            self._ai_playback_seq += 1
+            seq = self._ai_playback_seq
+            self.animate_solution(list(self.last_solution_moves), seq)
+
+        for item in [btn, btn_t]:
+            self.canvas.tag_bind(item, "<ButtonRelease-1>",
+                lambda e: _on_solver_ok())
+            self.canvas.tag_bind(item, "<Enter>",
+                lambda e: self.canvas.config(cursor="hand2"))
+            self.canvas.tag_bind(item, "<Leave>",
+                lambda e: self.canvas.config(cursor=""))
+
+        self.canvas.tag_raise("solver_popup")
+
     def solve_with_bfs(self):
         if getattr(self, "is_solving", False): return
         self.is_solving = True
-        self._set_ai_solving_status(sum(self.state.foundations.values()))
+        self._highlight_solver("BFS")
+        self._set_ai_solving_status("BFS", sum(self.state.foundations.values()))
         
         def worker():
             try:
                 from solvers.bfs_solver import BFSSolver
                 solver = BFSSolver(debug=True, debug_every=100000)
-                path, metrics = solver.solve(self.state, progress_callback=self._make_ai_progress_callback(), foundation_priority_mode=self.foundation_priority_var.get())
+                path, metrics = solver.solve(self.state, progress_callback=self._make_ai_progress_callback("BFS"), foundation_priority_mode=self.foundation_priority_var.get())
                 self.root.after(0, lambda: self._on_solver_complete("BFS", path, metrics))
             except NotImplementedError: self.root.after(0, lambda: self._on_solver_not_implemented("BFS"))
         threading.Thread(target=worker, daemon=True).start()
@@ -1753,13 +3754,14 @@ class FreeCell_GUI:
     def solve_with_dfs(self):
         if getattr(self, "is_solving", False): return
         self.is_solving = True
-        self._set_ai_solving_status(sum(self.state.foundations.values()))
+        self._highlight_solver("DFS")
+        self._set_ai_solving_status("DFS", sum(self.state.foundations.values()))
         
         def worker():
             try:
                 from solvers.dfs_solver import DFSSolver
                 solver = DFSSolver(debug=True, debug_every=100000)
-                path, metrics = solver.solve(self.state, progress_callback=self._make_ai_progress_callback(), foundation_priority_mode=self.foundation_priority_var.get())
+                path, metrics = solver.solve(self.state, progress_callback=self._make_ai_progress_callback("DFS"), foundation_priority_mode=self.foundation_priority_var.get())
                 self.root.after(0, lambda: self._on_solver_complete("DFS", path, metrics))
             except NotImplementedError: self.root.after(0, lambda: self._on_solver_not_implemented("DFS"))
         threading.Thread(target=worker, daemon=True).start()
@@ -1767,24 +3769,26 @@ class FreeCell_GUI:
     def solve_with_astar(self):
         if getattr(self, "is_solving", False): return
         self.is_solving = True
-        self._set_ai_solving_status(sum(self.state.foundations.values()))
+        self._highlight_solver("A*")
+        self._set_ai_solving_status("A*", sum(self.state.foundations.values()))
         
         def worker():
             from solvers.astar_solver import AStarSolver
             solver = AStarSolver(debug=True, debug_every=1000)
-            path, metrics = solver.solve(self.state, progress_callback=self._make_ai_progress_callback(), foundation_priority_mode=self.foundation_priority_var.get())
+            path, metrics = solver.solve(self.state, progress_callback=self._make_ai_progress_callback("A*"), foundation_priority_mode=self.foundation_priority_var.get())
             self.root.after(0, lambda: self._on_solver_complete("A*", path, metrics))
         threading.Thread(target=worker, daemon=True).start()
 
     def solve_with_ucs(self):
         if getattr(self, "is_solving", False): return
         self.is_solving = True
-        self._set_ai_solving_status(sum(self.state.foundations.values()))
+        self._highlight_solver("UCS")
+        self._set_ai_solving_status("UCS", sum(self.state.foundations.values()))
         
         def worker():
             from solvers.ucs_solver import UCSSolver
             solver = UCSSolver(debug=True, debug_every=100000)
-            path, metrics = solver.solve(self.state, progress_callback=self._make_ai_progress_callback(), foundation_priority_mode=self.foundation_priority_var.get())
+            path, metrics = solver.solve(self.state, progress_callback=self._make_ai_progress_callback("UCS"), foundation_priority_mode=self.foundation_priority_var.get())
             self.root.after(0, lambda: self._on_solver_complete("UCS", path, metrics))
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1815,27 +3819,39 @@ class FreeCell_GUI:
 
     def _on_solver_not_implemented(self, name):
         self.is_solving = False
+        self._reset_solver_highlight()
         self.status_var.set(f"{name} is not implemented yet.")
 
     def _on_solver_complete(self, name, path, metrics):
         self.is_solving = False
+        self._reset_solver_highlight()
+        self._cancel_ai_playback()
         if path is not None:
             self.last_solution_moves = list(path)
             self.last_solver_name = name
             elapsed = metrics.get('time_taken', 0.0)
+            nodes = metrics.get('nodes_explored', 0)
             self.status_var.set(f"{name} solved in {len(path)} moves ({elapsed:.2f}s).")
-            self.root.after(500, lambda: self.animate_solution(list(path)))
+            self.show_solver_stats_popup(name, len(path), elapsed, nodes)
         else:
+            elapsed = metrics.get('time_taken', 0.0)
+            nodes = metrics.get('nodes_explored', 0)
             self.status_var.set(f"{name} did not find a solution.")
+            self.show_no_solution_popup(name, nodes, elapsed)
 
-    def _make_ai_progress_callback(self):
+    def _make_ai_progress_callback(self, algorithm):
         def cb(data):
             p = data.get("best_foundation_progress", 0)
-            self.root.after(0, lambda: self._set_ai_solving_status(p))
+            self.root.after(0, lambda: self._set_ai_solving_status(algorithm, p))
         return cb
 
-    def _set_ai_solving_status(self, progress):
-        self.status_var.set(f"AI solving: {(progress/52)*100:.1f}% (best foundation progress)")
+    def _set_ai_solving_status(self, algorithm, progress):
+        total = 52
+        current = max(0, min(total, int(progress)))
+        bar_slots = 20
+        filled = int(round((current / total) * bar_slots))
+        bar = ("█" * filled) + ("▒" * (bar_slots - filled))
+        self.status_var.set(f"{algorithm} finding progress: [ {bar} ] {current}/{total}")
 
     def _apply_move_object(self, state, move):
         return FreeCell.apply_move(state, move) if hasattr(FreeCell, 'apply_move') else self._apply_move_fallback(state, move)
@@ -1906,10 +3922,24 @@ class FreeCell_GUI:
             
             tx, ty = self._target_card_position_after_move(step["next_state"], "foundation", step["card"].suit, 1)
             
-            chosen = {"tx": tx, "ty": ty, "next_state": step["next_state"], "msg": base_msg}
+            chosen = {
+                "tx": tx,
+                "ty": ty,
+                "next_state": step["next_state"],
+                "msg": base_msg,
+                "target_kind": "foundation",
+                "target_val": step["card"].suit,
+            }
+
+            def _on_auto_step_complete(o, n, _m):
+                self._move_count += 1
+                self.history.append(o.copy())
+                self.state = n
+                run(idx + 1)
+
             self._start_auto_move_animation(
                 [step["card"]], skind, sidx, spos, chosen,
-                on_complete=lambda o, n, m: [self._push_history(), setattr(self, 'state', n), run(idx+1)],
+                on_complete=_on_auto_step_complete,
                 duration=0.16
             )
         run(0)
@@ -1949,8 +3979,9 @@ class FreeCell_GUI:
     def _get_background_photo(self, w, h):
         """Retrieves or loads the current background image sized to canvas."""
         if not (Image and ImageTk): return None
-        path = self._background_name_to_path.get(self.background_var.get())
+        path = self._game_background_path
         if not path: return None
+        if not path.exists(): return None
         
         key = (str(path), w, h)
         if key in self._background_photo_cache: return self._background_photo_cache[key]
@@ -1965,20 +3996,8 @@ class FreeCell_GUI:
         self._background_photo_cache[key] = photo
         return photo
 
-    def _discover_backgrounds(self):
-        """Scans the assets directory for valid background images."""
-        found = {}
-        if self._backgrounds_root.exists():
-            for p in sorted(self._backgrounds_root.iterdir()):
-                if p.stem != "background_menu" and p.suffix.lower() in {".png", ".jpg", ".jpeg"}:
-                    found[p.stem] = p
-        return found
-
     def _get_background_theme_base(self):
         """Returns the base color hex for the current background theme."""
-        name = (self.background_var.get() or "").lower()
-        if "cyan" in name or "background_2" in name: return "#0d6f78"
-        if "blue" in name or "background_1" in name: return "#0b2a66"
         return "#1f5b3a"
 
     def _card_fill_color(self, card):
@@ -2236,6 +4255,7 @@ class FreeCell_GUI:
 
     def _finalize_auto_move_state(self, o_state, n_state, msg):
         """Commits the final state after an auto-move animation completes."""
+        self._move_count += 1
         self.history.append(o_state)
         self.state = n_state
         self.selection = None
@@ -2256,7 +4276,9 @@ class FreeCell_GUI:
             "end_x": chosen["tx"], "end_y": chosen["ty"],
             "start_time": time.time(), "duration": duration,
             "origin_state": o_state, "next_state": chosen["next_state"], "msg": chosen["msg"],
-            "on_complete": on_complete
+            "on_complete": on_complete,
+            "target_kind": chosen.get("target_kind"),
+            "target_val": chosen.get("target_val"),
         })
         self._tick_auto_move_animation()
 
@@ -2322,6 +4344,7 @@ class FreeCell_GUI:
 
     def _set_state_if_valid(self, n_state, msg):
         """Updates game state and UI if the move was valid."""
+        self._move_count += 1
         self._push_history()
         self.state = n_state
         self.selection = None
