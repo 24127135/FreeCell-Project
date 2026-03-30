@@ -1,0 +1,28 @@
+{
+  "algorithms": [
+    {
+      "algorithm": "A*",
+      "runs": 2,
+      "avg_time": 0.0056500000000000005,
+      "avg_nodes": 13.5
+    },
+    {
+      "algorithm": "BFS",
+      "runs": 2,
+      "avg_time": 3.42675,
+      "avg_nodes": 35627.5
+    },
+    {
+      "algorithm": "DFS",
+      "runs": 2,
+      "avg_time": 0.005,
+      "avg_nodes": 13.5
+    },
+    {
+      "algorithm": "UCS",
+      "runs": 2,
+      "avg_time": 4.49845,
+      "avg_nodes": 37664.0
+    }
+  ]
+}

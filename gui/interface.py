@@ -5,7 +5,9 @@
 # ============================================================
 
 import math
+import json
 import random
+import re
 import threading
 import time
 import tkinter as tk
@@ -24,7 +26,7 @@ except ImportError:
     Image = None
     ImageTk = None
 
-from game import Card, FreeCell
+from game import Card, FreeCell, GameState
 
 
 # ============================================================
@@ -292,10 +294,11 @@ class MenuScreen:
     RAIN_FRAME_MS = 20
     RESOLUTION_VISIBLE_ROWS = 4
 
-    def __init__(self, canvas, on_play, on_load_test, on_set_resolution=None, get_resolution_options=None, get_current_resolution_label=None, on_show_menu=None, on_hide_menu=None):
+    def __init__(self, canvas, on_play, on_load_test, on_open_report=None, on_set_resolution=None, get_resolution_options=None, get_current_resolution_label=None, on_show_menu=None, on_hide_menu=None):
         self.canvas = canvas
         self.on_play = on_play
         self.on_load_test = on_load_test
+        self.on_open_report = on_open_report
         self.on_set_resolution = on_set_resolution
         self.get_resolution_options = get_resolution_options
         self.get_current_resolution_label = get_current_resolution_label
@@ -319,6 +322,7 @@ class MenuScreen:
         self._play_text_id = None
         self._test_text_id = None
         self._resolution_text_id = None
+        self._report_text_id = None
         self._menu_bind_id = None
         self._wheel_bind_id = None
         self._wheel_up_bind_id = None
@@ -475,6 +479,7 @@ class MenuScreen:
         self._cursor_id = None
         self._play_text_id = None
         self._test_text_id = None
+        self._report_text_id = None
 
     def _on_canvas_configure(self, _evt=None):
         """Handles canvas resize events for the menu."""
@@ -592,7 +597,8 @@ class MenuScreen:
         play_y = canvas_h * 0.55
         row_gap = max(38, int(round(44 * scale)))
         test_y = play_y + row_gap
-        resolution_y = test_y + row_gap
+        report_y = test_y + row_gap
+        resolution_y = report_y + row_gap
         hit_w = max(220, int(round(260 * scale)))
         hit_h = max(34, int(round(38 * scale)))
 
@@ -628,6 +634,17 @@ class MenuScreen:
             tags=("menu", "menu_ui"),
         )
         self._item_ids.append(self._test_text_id)
+
+        self._report_text_id = self.canvas.create_text(
+            cx + max(8, int(round(10 * scale))),
+            report_y,
+            text="REPORT",
+            fill="#00a827",
+            font=self._font_menu,
+            anchor="center",
+            tags=("menu", "menu_ui"),
+        )
+        self._item_ids.append(self._report_text_id)
 
         res_label = self.get_current_resolution_label() if callable(self.get_current_resolution_label) else "1280x720"
         self._resolution_text_id = self.canvas.create_text(
@@ -668,7 +685,16 @@ class MenuScreen:
             outline="",
             tags=("menu", "menu_ui"),
         )
-        self._item_ids.extend([play_hit, test_hit, res_hit])
+        report_hit = self.canvas.create_rectangle(
+            cx - hit_w / 2,
+            report_y - hit_h / 2,
+            cx + hit_w / 2,
+            report_y + hit_h / 2,
+            fill="",
+            outline="",
+            tags=("menu", "menu_ui"),
+        )
+        self._item_ids.extend([play_hit, test_hit, report_hit, res_hit])
 
         def _play_enter(_evt=None):
             self.canvas.itemconfig(self._play_text_id, fill="#ffffff")
@@ -697,6 +723,15 @@ class MenuScreen:
             self.canvas.itemconfig(self._resolution_text_id, fill="#00a827")
             self.canvas.config(cursor="")
 
+        def _report_enter(_evt=None):
+            self.canvas.itemconfig(self._report_text_id, fill="#ffffff")
+            self.canvas.config(cursor="hand2")
+            self._move_cursor_to(report_y)
+
+        def _report_leave(_evt=None):
+            self.canvas.itemconfig(self._report_text_id, fill="#00a827")
+            self.canvas.config(cursor="")
+
         def _play_release(_evt=None):
             self._fade_out(self.on_play)
 
@@ -705,6 +740,10 @@ class MenuScreen:
 
         def _res_release(_evt=None):
             self._toggle_resolution_panel()
+
+        def _report_release(_evt=None):
+            if callable(self.on_open_report):
+                self.on_open_report()
 
         for target in (play_hit, self._play_text_id):
             self.canvas.tag_bind(target, "<Enter>", _play_enter)
@@ -716,6 +755,11 @@ class MenuScreen:
             self.canvas.tag_bind(target, "<Leave>", _test_leave)
             self.canvas.tag_bind(target, "<ButtonRelease-1>", _test_release)
 
+        for target in (report_hit, self._report_text_id):
+            self.canvas.tag_bind(target, "<Enter>", _report_enter)
+            self.canvas.tag_bind(target, "<Leave>", _report_leave)
+            self.canvas.tag_bind(target, "<ButtonRelease-1>", _report_release)
+
         for target in (res_hit, self._resolution_text_id):
             self.canvas.tag_bind(target, "<Enter>", _res_enter)
             self.canvas.tag_bind(target, "<Leave>", _res_leave)
@@ -723,6 +767,7 @@ class MenuScreen:
 
         self._buttons["play"] = {"geom": (cx - hit_w / 2, play_y - hit_h / 2, hit_w, hit_h), "items": {"label": self._play_text_id, "hit": play_hit}}
         self._buttons["tests"] = {"geom": (cx - hit_w / 2, test_y - hit_h / 2, hit_w, hit_h), "items": {"label": self._test_text_id, "hit": test_hit}}
+        self._buttons["report"] = {"geom": (cx - hit_w / 2, report_y - hit_h / 2, hit_w, hit_h), "items": {"label": self._report_text_id, "hit": report_hit}}
         self._buttons["resolution"] = {"geom": (cx - hit_w / 2, resolution_y - hit_h / 2, hit_w, hit_h), "items": {"label": self._resolution_text_id, "hit": res_hit}}
 
     def _move_cursor_to(self, y):
@@ -881,8 +926,8 @@ class MenuScreen:
                 self._test_panel_items.append(item_id)
                 self._item_ids.append(item_id)
 
-        add_row(0, "Test Case 1", 1)
-        add_row(1, "Test Case 2", 2)
+        add_row(0, "Test Case 1 (13)", 1)
+        add_row(1, "Test Case 2 (20)", 2)
 
     def _draw_resolution_panel(self, x, y, w, visible_h):
         """Draws a styled dropdown panel for resolution selection."""
@@ -1275,6 +1320,7 @@ class FreeCell_GUI:
             self.canvas,
             on_play=self._start_new_random_game_from_menu,
             on_load_test=self._load_test_from_menu,
+            on_open_report=self.open_results_report,
             on_set_resolution=self._set_resolution_from_menu,
             get_resolution_options=self._get_resolution_options,
             get_current_resolution_label=self._get_current_resolution_label,
@@ -1407,6 +1453,14 @@ class FreeCell_GUI:
         self._hud_deal_entry = None
         self._hud_deal_window_id = None
         self._hud_deal_button_geom = None
+        self._report_mode_active = False
+        self.report_panel = None
+        self.report_text_box = None
+        self.report_text_frame = None
+        self.report_graph_frame = None
+        self.report_graph_canvas = None
+        self.report_graph_data = None
+        self.report_case_var = None
 
     # ============================================================
     # REGION: Window & Layout
@@ -1559,6 +1613,231 @@ class FreeCell_GUI:
 
         self._make_panel_btn(self.left_panel, "EXPORT .TXT", self.export_actions_txt).pack(fill=tk.X, padx=10, pady=3)
 
+        self.report_panel = tk.Frame(
+            self.game_frame,
+            bg="#0d0f0d",
+            highlightbackground="#00ff41",
+            highlightthickness=1,
+            bd=0,
+        )
+        tk.Label(
+            self.report_panel,
+            text="REPORT VIEWER",
+            bg="#0d0f0d",
+            fg="#00ff41",
+            font=self._font_px_heading,
+            anchor="w",
+            padx=10,
+            pady=8,
+        ).pack(fill=tk.X)
+
+        report_btn_row = tk.Frame(self.report_panel, bg="#0d0f0d")
+        report_btn_row.pack(fill=tk.X, padx=10, pady=(4, 2))
+
+        tk.Button(
+            report_btn_row,
+            text="REFRESH",
+            command=self._refresh_report_panel,
+            bg="#0d0f0d",
+            fg="#00ff41",
+            activebackground="#0a2e0a",
+            activeforeground="#00ff41",
+            relief="solid",
+            bd=1,
+            highlightbackground="#00ff41",
+            highlightthickness=1,
+            font=self._font_px_small,
+            cursor="hand2",
+            padx=8,
+            pady=4,
+        ).pack(side=tk.LEFT)
+
+        tk.Button(
+            report_btn_row,
+            text="ERASE ALL",
+            command=self.erase_results_report,
+            bg="#3a0000",
+            fg="#ff6b6b",
+            activebackground="#5a0000",
+            activeforeground="#ffb3b3",
+            relief="solid",
+            bd=1,
+            highlightbackground="#ff6b6b",
+            highlightthickness=1,
+            font=self._font_px_small,
+            cursor="hand2",
+            padx=8,
+            pady=4,
+        ).pack(side=tk.LEFT, padx=(6, 0))
+
+        tk.Button(
+            report_btn_row,
+            text="GENERATE GRAPH",
+            command=self.generate_report_graph,
+            bg="#0d0f0d",
+            fg="#8ad1ff",
+            activebackground="#10263a",
+            activeforeground="#bfe8ff",
+            relief="solid",
+            bd=1,
+            highlightbackground="#8ad1ff",
+            highlightthickness=1,
+            font=self._font_px_small,
+            cursor="hand2",
+            padx=8,
+            pady=4,
+        ).pack(side=tk.LEFT, padx=(6, 0))
+
+        tk.Button(
+            report_btn_row,
+            text="VIEW GRAPH",
+            command=self._show_report_graph,
+            bg="#0d0f0d",
+            fg="#8ad1ff",
+            activebackground="#10263a",
+            activeforeground="#bfe8ff",
+            relief="solid",
+            bd=1,
+            highlightbackground="#8ad1ff",
+            highlightthickness=1,
+            font=self._font_px_small,
+            cursor="hand2",
+            padx=8,
+            pady=4,
+        ).pack(side=tk.LEFT, padx=(6, 0))
+
+        tk.Button(
+            report_btn_row,
+            text="VIEW REPORT",
+            command=self._show_report_text,
+            bg="#0d0f0d",
+            fg="#00ff41",
+            activebackground="#0a2e0a",
+            activeforeground="#00ff41",
+            relief="solid",
+            bd=1,
+            highlightbackground="#00ff41",
+            highlightthickness=1,
+            font=self._font_px_small,
+            cursor="hand2",
+            padx=8,
+            pady=4,
+        ).pack(side=tk.LEFT, padx=(6, 0))
+
+        tk.Button(
+            report_btn_row,
+            text="HIDE",
+            command=self._hide_report_panel,
+            bg="#0d0f0d",
+            fg="#00a827",
+            activebackground="#0a2e0a",
+            activeforeground="#00ff41",
+            relief="solid",
+            bd=1,
+            highlightbackground="#00a827",
+            highlightthickness=1,
+            font=self._font_px_small,
+            cursor="hand2",
+            padx=8,
+            pady=4,
+        ).pack(side=tk.RIGHT)
+
+        tk.Button(
+            report_btn_row,
+            text="BACK TO MENU",
+            command=self._report_back_to_menu,
+            bg="#0d0f0d",
+            fg="#00ff41",
+            activebackground="#0a2e0a",
+            activeforeground="#00ff41",
+            relief="solid",
+            bd=1,
+            highlightbackground="#00ff41",
+            highlightthickness=1,
+            font=self._font_px_small,
+            cursor="hand2",
+            padx=8,
+            pady=4,
+        ).pack(side=tk.RIGHT, padx=(0, 6))
+
+        case_row = tk.Frame(self.report_panel, bg="#0d0f0d")
+        case_row.pack(fill=tk.X, padx=10, pady=(2, 6))
+        tk.Label(
+            case_row,
+            text="ENTRY #",
+            bg="#0d0f0d",
+            fg="#00a827",
+            font=self._font_px_small,
+            anchor="w",
+        ).pack(side=tk.LEFT)
+
+        self.report_case_var = tk.StringVar(value="1")
+        tk.Entry(
+            case_row,
+            textvariable=self.report_case_var,
+            bg="#0d0f0d",
+            fg="#00ff41",
+            insertbackground="#00ff41",
+            font=self._font_px_small,
+            relief="solid",
+            bd=1,
+            highlightbackground="#00ff41",
+            highlightthickness=1,
+            width=4,
+        ).pack(side=tk.LEFT, padx=(6, 0), ipady=2)
+
+        tk.Button(
+            case_row,
+            text="ERASE ENTRY",
+            command=self.erase_results_report_case,
+            bg="#312000",
+            fg="#ffe08a",
+            activebackground="#4a3300",
+            activeforeground="#fff0b8",
+            relief="solid",
+            bd=1,
+            highlightbackground="#ffe08a",
+            highlightthickness=1,
+            font=self._font_px_small,
+            cursor="hand2",
+            padx=8,
+            pady=4,
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
+        self.report_text_frame = tk.Frame(self.report_panel, bg="#0d0f0d")
+        self.report_text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
+
+        report_scroll = tk.Scrollbar(self.report_text_frame)
+        report_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.report_text_box = tk.Text(
+            self.report_text_frame,
+            wrap=tk.WORD,
+            yscrollcommand=report_scroll.set,
+            bg="#0d0f0d",
+            fg="#00ff41",
+            insertbackground="#00ff41",
+            relief="flat",
+            bd=0,
+            highlightbackground="#00ff41",
+            highlightthickness=0,
+            font=("Consolas", 10),
+            height=24,
+        )
+        self.report_text_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        report_scroll.config(command=self.report_text_box.yview)
+
+        self.report_graph_frame = tk.Frame(self.report_panel, bg="#0d0f0d")
+        self.report_graph_canvas = tk.Canvas(
+            self.report_graph_frame,
+            bg="#0d0f0d",
+            highlightthickness=0,
+            bd=0,
+        )
+        self.report_graph_canvas.pack(fill=tk.BOTH, expand=True)
+        self.report_graph_canvas.bind("<Configure>", lambda _evt: self._draw_report_graph())
+        self.report_panel.place_forget()
+
         # Create a frame with white border for the undo button
         self.undo_frame = tk.Frame(self.root, bg="#ffffff", highlightthickness=0)
         self.undo_btn = tk.Button(
@@ -1710,6 +1989,7 @@ class FreeCell_GUI:
 
     def _on_menu_show(self):
         """Hides gameplay control panels while the menu is visible."""
+        self._hide_report_panel(silent=True)
         if hasattr(self, "left_panel") and self.left_panel.winfo_manager():
             self.left_panel.pack_forget()
 
@@ -3092,6 +3372,7 @@ class FreeCell_GUI:
                 self.canvas,
                 on_play=self._start_new_random_game_from_menu,
                 on_load_test=self._load_test_from_menu,
+                on_open_report=self.open_results_report,
                 on_set_resolution=self._set_resolution_from_menu,
                 get_resolution_options=self._get_resolution_options,
                 get_current_resolution_label=self._get_current_resolution_label,
@@ -3153,12 +3434,68 @@ class FreeCell_GUI:
         self.root.after_idle(self._sync_layout_after_menu_exit)
 
     def _load_test_1(self):
-        # Placeholder for test case 1
-        self.new_game()
+        self._cancel_ai_playback()
+        self._dismiss_win()
+        self.canvas.delete("solver_popup")
+
+        foundations = {'S': 9, 'C': 10, 'H': 10, 'D': 10}
+        cascades = [
+            [Card(10, 'S'), Card(12, 'H')],
+            [Card(11, 'C'), Card(13, 'D')],
+            [Card(11, 'H'), Card(13, 'S')],
+            [Card(11, 'D'), Card(13, 'C')],
+            [Card(11, 'S'), Card(13, 'H')],
+            [Card(12, 'C')],
+            [Card(12, 'D')],
+            [Card(12, 'S')],
+        ]
+        free_cells = [None, None, None, None]
+
+        self.state = GameState(cascades=cascades, free_cells=free_cells, foundations=foundations)
+        self.initial_state = self.state.copy()
+        self.current_deal_number = None
+        self._update_deal_code_label()
+        self.deal_var.set("")
+        self.selection = None
+        self.history = []
+        self.win_announced = False
+        self._move_count = 0
+        self._game_start_time = time.time()
+        self.status_var.set("Loaded Test Case 1.")
+        self.render()
+        self._setup_canvas_hud()
 
     def _load_test_2(self):
-        # Placeholder for test case 2
-        self.new_game()
+        self._cancel_ai_playback()
+        self._dismiss_win()
+        self.canvas.delete("solver_popup")
+
+        foundations = {'H': 13, 'C': 13, 'S': 6, 'D': 0}
+        cascades = [
+            [Card(7, 'S'), Card(8, 'S'), Card(9, 'S')],
+            [Card(10, 'S'), Card(11, 'S'), Card(12, 'S')],
+            [Card(13, 'S'), Card(1, 'D'), Card(2, 'D')],
+            [Card(3, 'D'), Card(4, 'D'), Card(5, 'D')],
+            [Card(6, 'D'), Card(7, 'D')],
+            [Card(8, 'D'), Card(9, 'D')],
+            [Card(10, 'D'), Card(11, 'D')],
+            [Card(12, 'D'), Card(13, 'D')],
+        ]
+        free_cells = [None, None, None, None]
+
+        self.state = GameState(cascades=cascades, free_cells=free_cells, foundations=foundations)
+        self.initial_state = self.state.copy()
+        self.current_deal_number = None
+        self._update_deal_code_label()
+        self.deal_var.set("")
+        self.selection = None
+        self.history = []
+        self.win_announced = False
+        self._move_count = 0
+        self._game_start_time = time.time()
+        self.status_var.set("Loaded Test Case 2.")
+        self.render()
+        self._setup_canvas_hud()
 
     # ============================================================
     # REGION: Win Sequence & Popups
@@ -3817,6 +4154,299 @@ class FreeCell_GUI:
             self.status_var.set(f"Exported: {path}")
         except Exception as e: self.status_var.set(f"Export failed: {e}")
 
+    def open_results_report(self):
+        if self._menu and getattr(self._menu, "_menu_active", False):
+            self._menu.hide()
+        self._show_report_panel()
+        self._refresh_report_panel()
+
+    def erase_results_report(self):
+        report_path = self._results_report_path()
+        try:
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write("UI TESTER RESULTS REPORT\n")
+                f.write("=" * 40 + "\n\n")
+        except OSError as exc:
+            self.status_var.set(f"Report erase failed: {exc}")
+            return False
+
+        self.status_var.set("Report erased.")
+        self._refresh_report_panel()
+        return True
+
+    def erase_results_report_case(self):
+        if self.report_case_var is None:
+            return False
+
+        try:
+            selection = int((self.report_case_var.get() or "").strip())
+        except ValueError:
+            self.status_var.set("Invalid entry number for report erase.")
+            return False
+
+        report_path = self._results_report_path()
+        content = self._read_results_report_text()
+        entries = self._parse_results_report_entries(content)
+        if not entries:
+            self.status_var.set("No report entries to erase.")
+            return False
+
+        idx = selection - 1
+        if idx < 0 or idx >= len(entries):
+            self.status_var.set(f"Entry number out of range (1-{len(entries)}).")
+            return False
+
+        chosen_header = entries[idx][0]
+        kept_entries = [body for i, (_header, body) in enumerate(entries) if i != idx]
+        rebuilt = "UI TESTER RESULTS REPORT\n" + ("=" * 40) + "\n\n"
+        if kept_entries:
+            rebuilt += "\n\n".join(kept_entries) + "\n\n"
+
+        try:
+            report_path.write_text(rebuilt, encoding="utf-8")
+        except OSError as exc:
+            self.status_var.set(f"Failed to erase report entry: {exc}")
+            return False
+
+        self.status_var.set(f"Erased report entry: {chosen_header}")
+        self._refresh_report_panel()
+        return True
+
+    def _results_report_path(self):
+        return Path(__file__).resolve().parent.parent / "results_ui.txt"
+
+    def _show_report_panel(self):
+        self._enter_report_mode()
+        if self.report_panel is not None and not self.report_panel.winfo_ismapped():
+            self.report_panel.place(relx=0.02, rely=0.03, relwidth=0.96, relheight=0.94)
+            self.report_panel.lift()
+
+    def _hide_report_panel(self, silent=False):
+        if self.report_panel is not None and self.report_panel.winfo_ismapped():
+            self.report_panel.place_forget()
+        self._exit_report_mode()
+        if not silent:
+            self.status_var.set("Report viewer hidden.")
+
+    def _report_back_to_menu(self):
+        self._hide_report_panel(silent=True)
+        self.back_to_menu()
+
+    def _enter_report_mode(self):
+        self._report_mode_active = True
+        if hasattr(self, "left_panel") and self.left_panel.winfo_manager():
+            self.left_panel.pack_forget()
+        try:
+            self.canvas.itemconfigure("hud", state="hidden")
+        except tk.TclError:
+            pass
+
+    def _exit_report_mode(self):
+        self._report_mode_active = False
+        menu_active = bool(self._menu and getattr(self._menu, "_menu_active", False))
+        if not menu_active and hasattr(self, "left_panel") and not self.left_panel.winfo_manager():
+            self.left_panel.pack(side=tk.LEFT, fill=tk.Y, before=self.game_frame)
+        if not menu_active:
+            try:
+                self.canvas.itemconfigure("hud", state="normal")
+            except tk.TclError:
+                pass
+            self._raise_hud()
+
+    def _read_results_report_text(self):
+        report_path = self._results_report_path()
+        if not report_path.exists():
+            return "UI TESTER RESULTS REPORT\n" + ("=" * 40) + "\n\n"
+        try:
+            return report_path.read_text(encoding="utf-8")
+        except OSError:
+            return "UI TESTER RESULTS REPORT\n" + ("=" * 40) + "\n\n"
+
+    def _set_report_text(self, text):
+        if self.report_text_box is None:
+            return
+        self.report_text_box.configure(state=tk.NORMAL)
+        self.report_text_box.delete("1.0", tk.END)
+        self.report_text_box.insert("1.0", text)
+        self.report_text_box.configure(state=tk.DISABLED)
+
+    def _show_report_text(self):
+        if self.report_graph_frame is not None and self.report_graph_frame.winfo_ismapped():
+            self.report_graph_frame.pack_forget()
+        if self.report_text_frame is not None and not self.report_text_frame.winfo_ismapped():
+            self.report_text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
+
+    def _show_report_graph(self):
+        if self.report_graph_data is None:
+            if not self.generate_report_graph():
+                return
+        if self.report_text_frame is not None and self.report_text_frame.winfo_ismapped():
+            self.report_text_frame.pack_forget()
+        if self.report_graph_frame is not None and not self.report_graph_frame.winfo_ismapped():
+            self.report_graph_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
+        self._draw_report_graph()
+
+    def generate_report_graph(self):
+        content = self._read_results_report_text()
+        graph_data = self._build_report_graph_data(content)
+        if not graph_data.get("algorithms"):
+            self.status_var.set("No report data available to graph.")
+            self.report_graph_data = None
+            return False
+
+        self.report_graph_data = graph_data
+        try:
+            output_path = Path(__file__).resolve().parent.parent / "results_graph.json"
+            output_path.write_text(json.dumps(graph_data, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+        self.status_var.set(f"Graph generated for {len(graph_data['algorithms'])} algorithm(s).")
+        return True
+
+    def _build_report_graph_data(self, content):
+        algo_stats = {}
+        current_algo = None
+
+        for raw_line in content.splitlines():
+            line = raw_line.strip()
+
+            algo_match = re.match(r"^---\s+(.+?)\s+\[[^\]]+\]\s+---$", line)
+            if algo_match:
+                label = algo_match.group(1).strip()
+                if label.upper().startswith("A*"):
+                    label = "A*"
+                current_algo = label
+                if current_algo not in algo_stats:
+                    algo_stats[current_algo] = {"times": [], "nodes": []}
+                continue
+
+            if current_algo is None:
+                continue
+
+            t_match = re.search(r"Search time:\s*([0-9]+(?:\.[0-9]+)?)", line, re.IGNORECASE)
+            if t_match:
+                algo_stats[current_algo]["times"].append(float(t_match.group(1)))
+                continue
+
+            n_match = re.search(r"Expanded nodes:\s*([0-9]+)", line, re.IGNORECASE)
+            if n_match:
+                algo_stats[current_algo]["nodes"].append(int(n_match.group(1)))
+
+        rows = []
+        for algo, values in algo_stats.items():
+            time_vals = values["times"]
+            node_vals = values["nodes"]
+            if not time_vals and not node_vals:
+                continue
+            avg_time = sum(time_vals) / len(time_vals) if time_vals else 0.0
+            avg_nodes = sum(node_vals) / len(node_vals) if node_vals else 0.0
+            runs = max(len(time_vals), len(node_vals))
+            rows.append(
+                {
+                    "algorithm": algo,
+                    "runs": runs,
+                    "avg_time": avg_time,
+                    "avg_nodes": avg_nodes,
+                }
+            )
+
+        rows.sort(key=lambda x: x["algorithm"])
+        return {"algorithms": rows}
+
+    def _draw_report_graph(self):
+        canvas = self.report_graph_canvas
+        data = self.report_graph_data
+        if canvas is None or not canvas.winfo_exists():
+            return
+
+        canvas.delete("all")
+        w = max(1, int(canvas.winfo_width()))
+        h = max(1, int(canvas.winfo_height()))
+        if data is None or not data.get("algorithms"):
+            canvas.create_text(w // 2, h // 2, text="No graph data. Click GENERATE GRAPH.", fill="#8ad1ff", font=("Consolas", 12, "bold"))
+            return
+
+        rows = data["algorithms"]
+        margin = 36
+        panel_gap = 24
+        panel_h = max(120, (h - margin * 2 - panel_gap) // 2)
+        top_y0 = margin
+        top_y1 = top_y0 + panel_h
+        bot_y0 = top_y1 + panel_gap
+        bot_y1 = min(h - margin, bot_y0 + panel_h)
+
+        def draw_panel(y0, y1, metric_key, title, color):
+            canvas.create_rectangle(margin, y0, w - margin, y1, outline="#00ff41", width=1)
+            canvas.create_text(margin + 8, y0 + 14, text=title, anchor="w", fill="#00ff41", font=("Consolas", 11, "bold"))
+
+            values = [max(0.0, float(row[metric_key])) for row in rows]
+            vmax = max(values) if values else 1.0
+            vmax = vmax if vmax > 0 else 1.0
+
+            plot_x0 = margin + 10
+            plot_x1 = w - margin - 10
+            plot_y0 = y0 + 28
+            plot_y1 = y1 - 26
+            plot_w = max(1, plot_x1 - plot_x0)
+            plot_h = max(1, plot_y1 - plot_y0)
+
+            count = len(rows)
+            slot_w = plot_w / max(1, count)
+            bar_w = max(18, int(slot_w * 0.55))
+
+            for i, row in enumerate(rows):
+                val = max(0.0, float(row[metric_key]))
+                frac = val / vmax
+                bh = max(1, int(plot_h * frac))
+                cx = int(plot_x0 + (i + 0.5) * slot_w)
+                x0 = cx - bar_w // 2
+                x1 = cx + bar_w // 2
+                yb = plot_y1
+                yt = yb - bh
+                canvas.create_rectangle(x0, yt, x1, yb, fill=color, outline=color)
+                canvas.create_text(cx, yb + 12, text=row["algorithm"], fill="#00ff41", font=("Consolas", 9, "bold"))
+                if metric_key == "avg_time":
+                    val_label = f"{val:.3f}s"
+                else:
+                    val_label = f"{int(round(val)):,}"
+                canvas.create_text(cx, yt - 8, text=val_label, fill="#8ad1ff", font=("Consolas", 8, "bold"))
+
+            canvas.create_text(plot_x1, y0 + 14, text=f"max={vmax:.3f}" if metric_key == "avg_time" else f"max={int(round(vmax)):,}", anchor="e", fill="#8ad1ff", font=("Consolas", 9))
+
+        draw_panel(top_y0, top_y1, "avg_time", "Average Search Time", "#00c8ff")
+        draw_panel(bot_y0, bot_y1, "avg_nodes", "Average Expanded Nodes", "#00ff7a")
+
+    def _parse_results_report_entries(self, content):
+        lines = content.splitlines(keepends=True)
+        starts = [i for i, line in enumerate(lines) if line.startswith("[Test case ")]
+        entries = []
+        for idx, start in enumerate(starts):
+            end = starts[idx + 1] if idx + 1 < len(starts) else len(lines)
+            header = lines[start].strip()
+            body = "".join(lines[start:end]).rstrip("\n")
+            entries.append((header, body))
+        return entries
+
+    def _refresh_report_panel(self):
+        content = self._read_results_report_text()
+        self._set_report_text(content)
+        self.report_graph_data = self._build_report_graph_data(content)
+        entries = self._parse_results_report_entries(content)
+        if self.report_case_var is not None:
+            current = 1
+            try:
+                current = int((self.report_case_var.get() or "1").strip())
+            except ValueError:
+                current = 1
+            if not entries:
+                self.report_case_var.set("1")
+            else:
+                self.report_case_var.set(str(max(1, min(current, len(entries)))))
+        if self.report_graph_frame is not None and self.report_graph_frame.winfo_ismapped():
+            self._draw_report_graph()
+        self.status_var.set(f"Report loaded ({len(entries)} entr{'y' if len(entries) == 1 else 'ies'}).")
+
     def _on_solver_not_implemented(self, name):
         self.is_solving = False
         self._reset_solver_highlight()
@@ -3826,16 +4456,15 @@ class FreeCell_GUI:
         self.is_solving = False
         self._reset_solver_highlight()
         self._cancel_ai_playback()
+        nodes = metrics.get('expanded_nodes', metrics.get('nodes_explored', 0))
         if path is not None:
             self.last_solution_moves = list(path)
             self.last_solver_name = name
             elapsed = metrics.get('time_taken', 0.0)
-            nodes = metrics.get('nodes_explored', 0)
             self.status_var.set(f"{name} solved in {len(path)} moves ({elapsed:.2f}s).")
             self.show_solver_stats_popup(name, len(path), elapsed, nodes)
         else:
             elapsed = metrics.get('time_taken', 0.0)
-            nodes = metrics.get('nodes_explored', 0)
             self.status_var.set(f"{name} did not find a solution.")
             self.show_no_solution_popup(name, nodes, elapsed)
 
