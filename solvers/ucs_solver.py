@@ -1,12 +1,8 @@
-"""Uniform-Cost Search solver implementation."""
-
 import heapq
 import time
 
 
 class UCSSolver:
-    """UCS solver for FreeCell."""
-
     def __init__(self, debug=False, debug_every=1000):
         self.debug = debug
         self.debug_every = max(1, int(debug_every))
@@ -22,7 +18,6 @@ class UCSSolver:
         frontier = []
         counter = 0
 
-        # Tie-break with higher foundation progress first when g is equal.
         start_progress = sum(initial_state.foundations.values())
         heapq.heappush(frontier, (0, -start_progress, counter, 0, initial_state))
 
@@ -99,7 +94,7 @@ class UCSSolver:
                 current_state,
                 foundation_only=foundation_priority_mode,
             ):
-                new_g = g + 1
+                new_g = g + move.card.rank
 
                 if next_state not in best_g or new_g < best_g[next_state]:
                     best_g[next_state] = new_g
