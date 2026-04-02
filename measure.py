@@ -11,6 +11,9 @@ from solvers.bfs_solver import BFSSolver
 from solvers.dfs_solver import DFSSolver
 from solvers.ucs_solver import UCSSolver
 
+
+FIXED_TEST_SET_ORDER = ["11", "10"]
+
 def get_11_cards_state():
     foundations = {'S': 11, 'C': 10, 'H': 10, 'D': 10}
 
@@ -49,7 +52,11 @@ class AlgorithmTesterUI:
         self.root.geometry("700x580")
         
         self.filename = "results_ui.txt"
-        self.saved_results = {} 
+        self.saved_results = {}
+        self.fixed_testcases = {
+            "11": ("11 cards", get_11_cards_state),
+            "10": ("10 cards", get_10_cards_state),
+        }
         
         self._initialize_file()
         self.setup_ui()
@@ -98,6 +105,15 @@ class AlgorithmTesterUI:
         self.btn_ucs = tk.Button(frame_mid, text="Run UCS", width=12, command=lambda: self.start_thread("UCS", UCSSolver(debug=False)))
         self.btn_ucs.pack(side="left", padx=5)
 
+        self.btn_batch = tk.Button(
+            frame_mid,
+            text="Run Fixed Set",
+            width=14,
+            command=self.start_batch_thread,
+            bg="#ffe9b3",
+        )
+        self.btn_batch.pack(side="left", padx=5)
+
         frame_game = tk.Frame(self.root)
         frame_game.pack(fill="x", padx=10, pady=5)
         tk.Button(frame_game, text="Open FreeCell Game GUI", command=self.open_game_gui, bg="lightblue").pack(side="right")
@@ -114,8 +130,16 @@ class AlgorithmTesterUI:
         self.txt_log.see(tk.END)
 
     def toggle_buttons(self, state):
-        for btn in [self.btn_astar, self.btn_bfs, self.btn_dfs, self.btn_ucs]:
+        for btn in [self.btn_astar, self.btn_bfs, self.btn_dfs, self.btn_ucs, self.btn_batch]:
             btn.config(state=state)
+
+    def _get_case_label(self, case_key):
+        label, _factory = self.fixed_testcases.get(case_key, ("11 cards", get_11_cards_state))
+        return label
+
+    def _get_case_state(self, case_key):
+        label, factory = self.fixed_testcases.get(case_key, ("11 cards", get_11_cards_state))
+        return label, factory()
 
     def open_game_gui(self):
         state = get_11_cards_state() if self.testcase_var.get() == "11" else get_10_cards_state()
@@ -128,26 +152,72 @@ class AlgorithmTesterUI:
 
     def start_thread(self, name, solver):
         self.toggle_buttons(tk.DISABLED) 
-        case_name = "11 cards" if self.testcase_var.get() == "11" else "10 cards"
+        case_key = self.testcase_var.get()
+        case_name = self._get_case_label(case_key)
         priority_status = "ON" if self.foundation_priority_var.get() else "OFF"
         
         self.log(f"\n[RUNNING] {name} - Test case {case_name} (Priority: {priority_status})... Please wait.")
         
-        thread = threading.Thread(target=self.run_algorithm, args=(name, solver, self.testcase_var.get(), self.foundation_priority_var.get()))
+        thread = threading.Thread(target=self.run_algorithm, args=(name, solver, case_key, self.foundation_priority_var.get(), False))
         thread.daemon = True
         thread.start()
 
-    def run_algorithm(self, name, solver, case_val, priority_val):
-        state = get_11_cards_state() if case_val == "11" else get_10_cards_state()
-        
-        # Start tracing memory
+    def start_batch_thread(self):
+        self.toggle_buttons(tk.DISABLED)
+        priority_val = self.foundation_priority_var.get()
+        priority_status = "ON" if priority_val else "OFF"
+        self.log(f"\n[RUNNING] Fixed test set ({', '.join(FIXED_TEST_SET_ORDER)}) with priority {priority_status}.")
+
+        thread = threading.Thread(target=self.run_fixed_test_set, args=(priority_val,))
+        thread.daemon = True
+        thread.start()
+
+    def run_fixed_test_set(self, priority_val):
+        solver_builders = [
+            ("A* Search", lambda: AStarSolver(debug=False)),
+            ("BFS", lambda: BFSSolver(debug=False, max_expansions=600000, max_time_seconds=120)),
+            ("DFS", lambda: DFSSolver(debug=False, max_depth=800, max_time_seconds=120)),
+            ("UCS", lambda: UCSSolver(debug=False)),
+        ]
+
+        total_jobs = len(FIXED_TEST_SET_ORDER) * len(solver_builders)
+        done_jobs = 0
+
+        try:
+            for case_key in FIXED_TEST_SET_ORDER:
+                case_name = self._get_case_label(case_key)
+                for solver_name, builder in solver_builders:
+                    done_jobs += 1
+                    self.root.after(
+                        0,
+                        self.log,
+                        f"[BATCH] ({done_jobs}/{total_jobs}) Running {solver_name} on {case_name}...",
+                    )
+                    self.run_algorithm(solver_name, builder(), case_key, priority_val, True)
+
+            self.root.after(0, self.log, "[DONE] Fixed test set run completed.")
+        except Exception as exc:
+            self.root.after(0, self.log, f"[ERROR] Batch run stopped: {exc}")
+        finally:
+            self.root.after(0, self.toggle_buttons, tk.NORMAL)
+
+    def run_algorithm(self, name, solver, case_key, priority_val, keep_buttons_disabled=False):
+        case_name, state = self._get_case_state(case_key)
+
         tracemalloc.start()
-        
-        path, stats = solver.solve(state, progress_callback=None, foundation_priority_mode=priority_val)
-        
-        # Stop tracing memory
-        current_mem, peak_mem = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
+        try:
+            path, stats = solver.solve(state, progress_callback=None, foundation_priority_mode=priority_val)
+            _current_mem, peak_mem = tracemalloc.get_traced_memory()
+        except Exception as exc:
+            if tracemalloc.is_tracing():
+                tracemalloc.stop()
+            self.root.after(0, self.log, f"[ERROR] {name} crashed on {case_name}: {exc}")
+            if not keep_buttons_disabled:
+                self.root.after(0, self.toggle_buttons, tk.NORMAL)
+            return
+        finally:
+            if tracemalloc.is_tracing():
+                tracemalloc.stop()
 
         # Process metrics
         peak_mb = peak_mem / (1024 * 1024)
@@ -179,25 +249,33 @@ class AlgorithmTesterUI:
             f"{'-'*40}"
         )
 
-        config_key = (case_val, priority_val, name)
+        config_key = (case_key, priority_val, name)
         self.saved_results[config_key] = result_text
         self._rewrite_file()
 
-        self.root.after(0, self.log, result_text)
-        self.root.after(0, self.toggle_buttons, tk.NORMAL)
+        self.root.after(0, self.log, f"[Test case {case_name} | {'Priority ON' if priority_val else 'Priority OFF'}]\n{result_text}")
+        if not keep_buttons_disabled:
+            self.root.after(0, self.toggle_buttons, tk.NORMAL)
 
     def _rewrite_file(self):
         with open(self.filename, 'w', encoding='utf-8') as f:
             f.write("UI TESTER RESULTS REPORT\n")
             f.write("="*40 + "\n\n")
-            
-            for key, res_text in self.saved_results.items():
-                case_val, priority_val, _ = key
-                case_str = "11 cards" if case_val == "11" else "10 cards"
+
+            grouped = {}
+            for (case_val, priority_val, solver_name), res_text in self.saved_results.items():
+                case_str = self._get_case_label(case_val)
+                key = (case_str, bool(priority_val))
+                grouped.setdefault(key, []).append((solver_name, res_text))
+
+            for (case_str, priority_val), rows in sorted(
+                grouped.items(), key=lambda item: (item[0][0], not item[0][1])
+            ):
                 priority_str = "Priority ON" if priority_val else "Priority OFF"
-                
                 f.write(f"[Test case {case_str} | {priority_str}]\n")
-                f.write(res_text + "\n\n")
+                for _solver_name, res_text in sorted(rows, key=lambda item: item[0]):
+                    f.write(res_text + "\n")
+                f.write("\n")
 
 if __name__ == "__main__":
     root = tk.Tk()

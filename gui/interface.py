@@ -1807,13 +1807,16 @@ class FreeCell_GUI:
         self.report_text_frame = tk.Frame(self.report_panel, bg="#0d0f0d")
         self.report_text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
 
-        report_scroll = tk.Scrollbar(self.report_text_frame)
-        report_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        report_scroll_y = tk.Scrollbar(self.report_text_frame, orient=tk.VERTICAL)
+        report_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        report_scroll_x = tk.Scrollbar(self.report_text_frame, orient=tk.HORIZONTAL)
+        report_scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
 
         self.report_text_box = tk.Text(
             self.report_text_frame,
-            wrap=tk.WORD,
-            yscrollcommand=report_scroll.set,
+            wrap=tk.NONE,
+            yscrollcommand=report_scroll_y.set,
+            xscrollcommand=report_scroll_x.set,
             bg="#0d0f0d",
             fg="#00ff41",
             insertbackground="#00ff41",
@@ -1823,9 +1826,14 @@ class FreeCell_GUI:
             highlightthickness=0,
             font=("Consolas", 10),
             height=24,
+            padx=8,
+            pady=6,
+            spacing1=1,
+            spacing3=1,
         )
         self.report_text_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        report_scroll.config(command=self.report_text_box.yview)
+        report_scroll_y.config(command=self.report_text_box.yview)
+        report_scroll_x.config(command=self.report_text_box.xview)
 
         self.report_graph_frame = tk.Frame(self.report_panel, bg="#0d0f0d")
         self.report_graph_canvas = tk.Canvas(

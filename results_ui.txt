@@ -1,10 +1,74 @@
 UI TESTER RESULTS REPORT
 ========================================
 
+[Test case 10 cards | Priority ON]
+--- A* Search [SUCCESS] ---
+  * Search time: 0.0060 seconds
+  * Memory usage (peak memory): 0.0628 MB
+  * Expanded nodes: 13
+  * Solution length: 12
+----------------------------------------
+--- BFS [SUCCESS] ---
+  * Search time: 3.8763 seconds
+  * Memory usage (peak memory): 29.8976 MB
+  * Expanded nodes: 21357
+  * Solution length: 12
+----------------------------------------
+--- DFS [SUCCESS] ---
+  * Search time: 0.0044 seconds
+  * Memory usage (peak memory): 0.0605 MB
+  * Expanded nodes: 13
+  * Solution length: 12
+----------------------------------------
+--- UCS [SUCCESS] ---
+  * Search time: 5.4135 seconds
+  * Memory usage (peak memory): 31.2237 MB
+  * Expanded nodes: 24851
+  * Solution length: 12
+----------------------------------------
+
 [Test case 11 cards | Priority ON]
 --- A* Search [SUCCESS] ---
-  * Search time: 0.0041 seconds
-  * Memory usage (peak memory): 0.0748 MB
+  * Search time: 0.0677 seconds
+  * Memory usage (peak memory): 0.0996 MB
+  * Expanded nodes: 14
+  * Solution length: 13
+----------------------------------------
+--- BFS [SUCCESS] ---
+  * Search time: 8.8539 seconds
+  * Memory usage (peak memory): 63.4098 MB
+  * Expanded nodes: 49898
+  * Solution length: 13
+----------------------------------------
+--- DFS [SUCCESS] ---
+  * Search time: 0.0061 seconds
+  * Memory usage (peak memory): 0.0719 MB
+  * Expanded nodes: 14
+  * Solution length: 13
+----------------------------------------
+--- UCS [SUCCESS] ---
+  * Search time: 11.5641 seconds
+  * Memory usage (peak memory): 64.7912 MB
+  * Expanded nodes: 51777
+  * Solution length: 13
+----------------------------------------
+
+[Test case 11 cards | Priority OFF]
+--- A* Search [SUCCESS] ---
+  * Search time: 0.1434 seconds
+  * Memory usage (peak memory): 0.3798 MB
+  * Expanded nodes: 14
+  * Solution length: 13
+----------------------------------------
+--- BFS [FAILED (Timeout)] ---
+  * Search time: 120.0093 seconds
+  * Memory usage (peak memory): 402.8831 MB
+  * Expanded nodes: 34884
+  * Solution length: N/A (Timeout)
+----------------------------------------
+--- DFS [SUCCESS] ---
+  * Search time: 0.2341 seconds
+  * Memory usage (peak memory): 0.3496 MB
   * Expanded nodes: 14
   * Solution length: 13
 ----------------------------------------

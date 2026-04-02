@@ -119,7 +119,7 @@ def run_self_test():
         traceback.print_exc()
         return 1
 
-
+    
 def main():
     """Main entry point for FreeCell application."""
     if "--self-test" in sys.argv:

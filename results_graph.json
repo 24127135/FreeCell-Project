@@ -2,27 +2,27 @@
   "algorithms": [
     {
       "algorithm": "A*",
-      "runs": 2,
-      "avg_time": 0.0056500000000000005,
-      "avg_nodes": 13.5
+      "runs": 3,
+      "avg_time": 0.010700000000000001,
+      "avg_nodes": 13.666666666666666
     },
     {
       "algorithm": "BFS",
-      "runs": 2,
-      "avg_time": 3.42675,
-      "avg_nodes": 35627.5
+      "runs": 3,
+      "avg_time": 41.831300000000006,
+      "avg_nodes": 41094.0
     },
     {
       "algorithm": "DFS",
-      "runs": 2,
-      "avg_time": 0.005,
-      "avg_nodes": 13.5
+      "runs": 3,
+      "avg_time": 0.011666666666666667,
+      "avg_nodes": 13.666666666666666
     },
     {
       "algorithm": "UCS",
       "runs": 2,
-      "avg_time": 4.49845,
-      "avg_nodes": 37664.0
+      "avg_time": 3.9541,
+      "avg_nodes": 38314.0
     }
   ]
 }
