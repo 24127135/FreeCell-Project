@@ -21,6 +21,11 @@ except ImportError:
     ctypes = None
 
 try:
+    import winsound
+except ImportError:
+    winsound = None
+
+try:
     from PIL import Image, ImageTk
 except ImportError:
     Image = None
@@ -119,7 +124,7 @@ def _clamp(value, low, high):
 # REGION: HUD & Buttons (Global Helpers)
 # ============================================================
 
-def draw_menu_button(canvas, x, y, w, h, label, on_click):
+def draw_menu_button(canvas, x, y, w, h, label, on_click, on_click_sound=None):
     """Draws a styled menu button with hover and press effects."""
     colors = {
         "idle": {"fill": "#0f3320", "outline": "#2d7a4f"},
@@ -198,6 +203,8 @@ def draw_menu_button(canvas, x, y, w, h, label, on_click):
         state["mode"] = "hover" if was_inside else "idle"
         apply_mode(state["mode"], 0)
         if was_inside:
+            if callable(on_click_sound):
+                on_click_sound()
             on_click()
 
     for target in (hit, label_id, rect):
@@ -209,7 +216,7 @@ def draw_menu_button(canvas, x, y, w, h, label, on_click):
     return {"glow1": glow1, "glow2": glow2, "rect": rect, "label": label_id, "hit": hit}
 
 
-def draw_pill_button(canvas, cx, cy, w, h, label, on_click, *, fill, outline, text_fill):
+def draw_pill_button(canvas, cx, cy, w, h, label, on_click, on_click_sound=None, *, fill, outline, text_fill):
     """Draws a pill-shaped button on the canvas."""
     h = int(h)
     w = int(w)
@@ -259,6 +266,8 @@ def draw_pill_button(canvas, cx, cy, w, h, label, on_click, *, fill, outline, te
 
     def on_release(evt):
         if _inside(evt):
+            if callable(on_click_sound):
+                on_click_sound()
             on_click()
 
     for target in (hit_id, label_id, bg_id):
@@ -294,7 +303,7 @@ class MenuScreen:
     RAIN_FRAME_MS = 20
     RESOLUTION_VISIBLE_ROWS = 4
 
-    def __init__(self, canvas, on_play, on_load_test, on_open_report=None, on_set_resolution=None, get_resolution_options=None, get_current_resolution_label=None, on_show_menu=None, on_hide_menu=None):
+    def __init__(self, canvas, on_play, on_load_test, on_open_report=None, on_set_resolution=None, get_resolution_options=None, get_current_resolution_label=None, on_show_menu=None, on_hide_menu=None, on_button_click=None):
         self.canvas = canvas
         self.on_play = on_play
         self.on_load_test = on_load_test
@@ -304,6 +313,7 @@ class MenuScreen:
         self.get_current_resolution_label = get_current_resolution_label
         self.on_show_menu = on_show_menu
         self.on_hide_menu = on_hide_menu
+        self.on_button_click = on_button_click
 
         self._item_ids = []
         self._bg_photo = None
@@ -733,15 +743,19 @@ class MenuScreen:
             self.canvas.config(cursor="")
 
         def _play_release(_evt=None):
+            self._play_button_click()
             self._fade_out(self.on_play)
 
         def _test_release(_evt=None):
+            self._play_button_click()
             self._toggle_test_panel()
 
         def _res_release(_evt=None):
+            self._play_button_click()
             self._toggle_resolution_panel()
 
         def _report_release(_evt=None):
+            self._play_button_click()
             if callable(self.on_open_report):
                 self.on_open_report()
 
@@ -769,6 +783,14 @@ class MenuScreen:
         self._buttons["tests"] = {"geom": (cx - hit_w / 2, test_y - hit_h / 2, hit_w, hit_h), "items": {"label": self._test_text_id, "hit": test_hit}}
         self._buttons["report"] = {"geom": (cx - hit_w / 2, report_y - hit_h / 2, hit_w, hit_h), "items": {"label": self._report_text_id, "hit": report_hit}}
         self._buttons["resolution"] = {"geom": (cx - hit_w / 2, resolution_y - hit_h / 2, hit_w, hit_h), "items": {"label": self._resolution_text_id, "hit": res_hit}}
+
+    def _play_button_click(self):
+        """Plays menu button click feedback via optional callback."""
+        if callable(self.on_button_click):
+            try:
+                self.on_button_click()
+            except Exception:
+                pass
 
     def _move_cursor_to(self, y):
         """Moves the menu cursor next to the active menu item."""
@@ -952,7 +974,16 @@ class MenuScreen:
             def do_load():
                 self._fade_out(lambda: self.on_load_test(case_key))
 
-            btn_items = draw_menu_button(self.canvas, btn_x, btn_y, btn_w, btn_h, "Load", do_load)
+            btn_items = draw_menu_button(
+                self.canvas,
+                btn_x,
+                btn_y,
+                btn_w,
+                btn_h,
+                "Load",
+                do_load,
+                on_click_sound=self._play_button_click,
+            )
             for item_id in btn_items.values():
                 self.canvas.itemconfigure(item_id, tags=("menu", "menu_ui"))
                 self._test_panel_items.append(item_id)
@@ -1018,7 +1049,16 @@ class MenuScreen:
                 self._animate_panel_close()
                 self._redraw()
 
-            btn_items = draw_menu_button(self.canvas, btn_x, btn_y, btn_w, btn_h, "Set", do_set)
+            btn_items = draw_menu_button(
+                self.canvas,
+                btn_x,
+                btn_y,
+                btn_w,
+                btn_h,
+                "Set",
+                do_set,
+                on_click_sound=self._play_button_click,
+            )
             for item_id in btn_items.values():
                 self.canvas.itemconfigure(item_id, tags=("menu", "menu_ui"))
                 self._test_panel_items.append(item_id)
@@ -1036,10 +1076,18 @@ class MenuScreen:
                 self._test_panel_items.append(item_id)
                 self._item_ids.append(item_id)
 
-            self.canvas.tag_bind(up_hit, "<ButtonRelease-1>", lambda _evt: self._scroll_resolution(-1))
-            self.canvas.tag_bind(dn_hit, "<ButtonRelease-1>", lambda _evt: self._scroll_resolution(1))
-            self.canvas.tag_bind(up_id, "<ButtonRelease-1>", lambda _evt: self._scroll_resolution(-1))
-            self.canvas.tag_bind(dn_id, "<ButtonRelease-1>", lambda _evt: self._scroll_resolution(1))
+            def _scroll_up(_evt=None):
+                self._play_button_click()
+                self._scroll_resolution(-1)
+
+            def _scroll_down(_evt=None):
+                self._play_button_click()
+                self._scroll_resolution(1)
+
+            self.canvas.tag_bind(up_hit, "<ButtonRelease-1>", _scroll_up)
+            self.canvas.tag_bind(dn_hit, "<ButtonRelease-1>", _scroll_down)
+            self.canvas.tag_bind(up_id, "<ButtonRelease-1>", _scroll_up)
+            self.canvas.tag_bind(dn_id, "<ButtonRelease-1>", _scroll_down)
 
 
 
@@ -1361,6 +1409,7 @@ class FreeCell_GUI:
             get_current_resolution_label=self._get_current_resolution_label,
             on_show_menu=self._on_menu_show,
             on_hide_menu=self._on_menu_hide,
+            on_button_click=self._play_click_sound,
         )
         mw, mh = self.WINDOW_SIZES[self._resolution_index]
         self._menu.set_ui_scale(self._ui_scale_for_resolution(mw, mh))
@@ -1443,6 +1492,7 @@ class FreeCell_GUI:
         self._cards_root = self._assets_root / "Cards"
         self._backgrounds_root = self._assets_root / "Backgrounds"
         self._fonts_root = self._assets_root / "Fonts"
+        self._sound_effects_root = self._assets_root / "Sound effects"
         self._game_background_path = self._backgrounds_root / self.GAME_BACKGROUND_FILE
 
         self._card_source_cache = {}
@@ -1473,6 +1523,35 @@ class FreeCell_GUI:
         self.ROW_GAP = 34
         self.TOP_INNER_GAP_DELTA = 4
         self.TOP_MIDDLE_EXTRA_GAP = 24
+
+    def _play_sound_effect(self, filename, fallback_bell=False):
+        """Plays a WAV sound effect asynchronously from assets/Sound effects."""
+        sound_path = self._sound_effects_root / str(filename)
+        played = False
+
+        if winsound is not None and sound_path.exists():
+            try:
+                winsound.PlaySound(
+                    str(sound_path),
+                    winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT,
+                )
+                played = True
+            except RuntimeError:
+                played = False
+
+        if fallback_bell and not played:
+            try:
+                self.root.bell()
+            except tk.TclError:
+                pass
+
+    def _play_click_sound(self):
+        """Plays UI click sound for button interactions."""
+        self._play_sound_effect("Click.wav")
+
+    def _play_notification_sound(self):
+        """Plays popup notification sound when a dialog appears."""
+        self._play_sound_effect("Notification.wav", fallback_bell=True)
 
     def _init_hud_vars(self):
         """Initializes HUD variables."""
@@ -1605,7 +1684,7 @@ class FreeCell_GUI:
         self.load_deal_btn = tk.Button(
             deal_frame,
             text="LOAD",
-            command=self._load_deal_from_panel,
+            command=self._wrap_button_command(self._load_deal_from_panel),
             bg="#00ff41",
             fg="#000000",
             activebackground="#00a827",
@@ -1646,6 +1725,7 @@ class FreeCell_GUI:
             fp_frame,
             text="FOUNDATION\nPRIORITY",
             variable=self.foundation_priority_var,
+            command=self._play_click_sound,
             bg="#0d0f0d",
             fg="#00a827",
             activebackground="#0d0f0d",
@@ -1682,7 +1762,7 @@ class FreeCell_GUI:
         tk.Button(
             report_btn_row,
             text="REFRESH",
-            command=self._refresh_report_panel,
+            command=self._wrap_button_command(self._refresh_report_panel),
             bg="#0d0f0d",
             fg="#00ff41",
             activebackground="#0a2e0a",
@@ -1700,7 +1780,7 @@ class FreeCell_GUI:
         tk.Button(
             report_btn_row,
             text="ERASE ALL",
-            command=self.erase_results_report,
+            command=self._wrap_button_command(self.erase_results_report),
             bg="#3a0000",
             fg="#ff6b6b",
             activebackground="#5a0000",
@@ -1718,7 +1798,7 @@ class FreeCell_GUI:
         tk.Button(
             report_btn_row,
             text="GENERATE GRAPH",
-            command=self.generate_report_graph,
+            command=self._wrap_button_command(self.generate_report_graph),
             bg="#0d0f0d",
             fg="#8ad1ff",
             activebackground="#10263a",
@@ -1736,7 +1816,7 @@ class FreeCell_GUI:
         tk.Button(
             report_btn_row,
             text="VIEW GRAPH",
-            command=self._show_report_graph,
+            command=self._wrap_button_command(self._show_report_graph),
             bg="#0d0f0d",
             fg="#8ad1ff",
             activebackground="#10263a",
@@ -1754,7 +1834,7 @@ class FreeCell_GUI:
         tk.Button(
             report_btn_row,
             text="VIEW REPORT",
-            command=self._show_report_text,
+            command=self._wrap_button_command(self._show_report_text),
             bg="#0d0f0d",
             fg="#00ff41",
             activebackground="#0a2e0a",
@@ -1772,7 +1852,7 @@ class FreeCell_GUI:
         tk.Button(
             report_btn_row,
             text="HIDE",
-            command=self._hide_report_panel,
+            command=self._wrap_button_command(self._hide_report_panel),
             bg="#0d0f0d",
             fg="#00a827",
             activebackground="#0a2e0a",
@@ -1790,7 +1870,7 @@ class FreeCell_GUI:
         tk.Button(
             report_btn_row,
             text="BACK TO MENU",
-            command=self._report_back_to_menu,
+            command=self._wrap_button_command(self._report_back_to_menu),
             bg="#0d0f0d",
             fg="#00ff41",
             activebackground="#0a2e0a",
@@ -1834,7 +1914,7 @@ class FreeCell_GUI:
         tk.Button(
             case_row,
             text="ERASE ENTRY",
-            command=self.erase_results_report_case,
+            command=self._wrap_button_command(self.erase_results_report_case),
             bg="#312000",
             fg="#ffe08a",
             activebackground="#4a3300",
@@ -1896,7 +1976,7 @@ class FreeCell_GUI:
         self.undo_btn = tk.Button(
             self.undo_frame,
             text="UNDO",
-            command=self.undo_move,
+            command=self._wrap_button_command(self.undo_move),
             bg="#0d0f0d",
             fg="#00ff41",
             activebackground="#0a2e0a",
@@ -2019,12 +2099,23 @@ class FreeCell_GUI:
         if hasattr(self, "_menu") and self._menu is not None:
             self._menu.set_ui_scale(scale)
 
+    def _wrap_button_command(self, command):
+        """Wraps a command so button clicks also trigger click audio."""
+        if command is None:
+            return None
+
+        def _wrapped(*args, **kwargs):
+            self._play_click_sound()
+            return command(*args, **kwargs)
+
+        return _wrapped
+
     def _make_panel_btn(self, parent, text, command):
         """Creates a CRT-styled control button for the left panel."""
         return tk.Button(
             parent,
             text=text,
-            command=command,
+            command=self._wrap_button_command(command),
             bg="#0d0f0d",
             fg="#00ff41",
             activebackground="#0a2e0a",
@@ -3431,6 +3522,7 @@ class FreeCell_GUI:
                 get_current_resolution_label=self._get_current_resolution_label,
                 on_show_menu=self._on_menu_show,
                 on_hide_menu=self._on_menu_hide,
+                on_button_click=self._play_click_sound,
             )
             cw, ch = self.WINDOW_SIZES[self._resolution_index]
             self._menu.set_ui_scale(self._ui_scale_for_resolution(cw, ch))
@@ -3834,6 +3926,7 @@ class FreeCell_GUI:
 
     def _show_win_popup(self):
         """Draws the You Win popup panel over the card rain."""
+        self._play_notification_sound()
         W = max(1, self.canvas.winfo_width())
         H = max(1, self.canvas.winfo_height())
         spacing = self._popup_spacing(W, H)
@@ -3937,10 +4030,12 @@ class FreeCell_GUI:
         )
 
         def _restart():
+            self._play_click_sound()
             self._dismiss_win()
             self.restart_deal()
 
         def _new_game():
+            self._play_click_sound()
             self._dismiss_win()
             self.new_game()
 
@@ -3966,6 +4061,7 @@ class FreeCell_GUI:
 
     def show_no_solution_popup(self, algorithm, nodes_explored, time_taken):
         """Shows a red error popup when solver finds no solution."""
+        self._play_notification_sound()
         W = max(1, self.canvas.winfo_width())
         H = max(1, self.canvas.winfo_height())
         spacing = self._popup_spacing(W, H)
@@ -4040,9 +4136,14 @@ class FreeCell_GUI:
             fill="#000000", font=self._font_px_label,
             anchor="center", tags="solver_popup"
         )
+
+        def _dismiss_solver_popup(_evt=None):
+            self._play_click_sound()
+            self.canvas.delete("solver_popup")
+
         for item in [btn, btn_t]:
             self.canvas.tag_bind(item, "<ButtonRelease-1>",
-                lambda e: self.canvas.delete("solver_popup"))
+                _dismiss_solver_popup)
             self.canvas.tag_bind(item, "<Enter>",
                 lambda e: self.canvas.config(cursor="hand2"))
             self.canvas.tag_bind(item, "<Leave>",
@@ -4052,6 +4153,7 @@ class FreeCell_GUI:
 
     def show_solver_stats_popup(self, algorithm, moves, time_taken, nodes_explored):
         """Shows solver stats panel during/after AI playback."""
+        self._play_notification_sound()
         W = max(1, self.canvas.winfo_width())
         H = max(1, self.canvas.winfo_height())
         spacing = self._popup_spacing(W, H)
@@ -4124,6 +4226,7 @@ class FreeCell_GUI:
             anchor="center", tags="solver_popup"
         )
         def _on_solver_ok():
+            self._play_click_sound()
             if self._ai_playback_active:
                 return
             self.canvas.delete("solver_popup")
