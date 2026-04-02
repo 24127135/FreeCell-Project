@@ -64,13 +64,37 @@ class Move:
 class FreeCell:
     """FreeCell game rules engine."""
 
+    MICROSOFT_CLASSIC_MAX_DEAL = 32000
+
+    @staticmethod
+    def _microsoft_rand(seed):
+        """Return next MSVC rand seed and value using classic LCG parameters."""
+        next_seed = (214013 * seed + 2531011) & 0xFFFFFFFF
+        return next_seed, (next_seed >> 16) & 0x7FFF
+
+    @staticmethod
+    def _create_microsoft_deck(deal_number):
+        """Create a Microsoft-compatible shuffled deck for a numbered deal."""
+        # Classic FreeCell uses suit-major order C, D, H, S then A..K.
+        deck = [Card(rank, suit) for suit in ["C", "D", "H", "S"] for rank in range(1, 14)]
+        seed = int(deal_number) & 0xFFFFFFFF
+
+        for i in range(len(deck) - 1, 0, -1):
+            seed, value = FreeCell._microsoft_rand(seed)
+            j = value % (i + 1)
+            deck[i], deck[j] = deck[j], deck[i]
+
+        return deck
+
     @staticmethod
     def create_initial_state(deal_number=None):
         """
         Create a standard FreeCell initial state (4x7, 4x6 cascades).
 
         Args:
-            deal_number (int|None): Optional numbered deal seed for reproducible shuffles
+            deal_number (int|None): Optional numbered deal seed.
+                - 1..32000 uses classic Microsoft deal generation
+                - Other values fall back to Python's seeded shuffle
 
         Returns:
             GameState: Freshly dealt board
@@ -79,16 +103,18 @@ class FreeCell:
         if deal_number is None:
             random.shuffle(deck)
         else:
-            rng = random.Random(deal_number)
-            rng.shuffle(deck)
+            deal_number = int(deal_number)
+            if 1 <= deal_number <= FreeCell.MICROSOFT_CLASSIC_MAX_DEAL:
+                deck = FreeCell._create_microsoft_deck(deal_number)
+            else:
+                rng = random.Random(deal_number)
+                rng.shuffle(deck)
 
         cascades = [[] for _ in range(8)]
-        index = 0
-        for pile in range(8):
-            count = 7 if pile < 4 else 6
-            for _ in range(count):
-                cascades[pile].append(deck[index])
-                index += 1
+        # Deal cards left-to-right in rounds, as in classic FreeCell.
+        for index, card in enumerate(deck):
+            pile = index % 8
+            cascades[pile].append(card)
 
         return GameState(cascades=cascades)
 

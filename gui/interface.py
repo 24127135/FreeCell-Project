@@ -3345,7 +3345,7 @@ class FreeCell_GUI:
         self._cancel_ai_playback()
         self._dismiss_win()
         self.canvas.delete("solver_popup")
-        effective_deal = deal_number if deal_number is not None else random.randint(1, 2_147_483_647)
+        effective_deal = deal_number if deal_number is not None else random.randint(1, FreeCell.MICROSOFT_CLASSIC_MAX_DEAL)
         self.current_deal_number = int(effective_deal)
         self._update_deal_code_label()
         self.deal_var.set(str(self.current_deal_number))
