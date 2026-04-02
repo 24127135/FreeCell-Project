@@ -838,10 +838,13 @@ class MenuScreen:
         """Calculates panel geometry under a specific menu button."""
         scale = self._ui_scale
         (bx, by, bw, bh) = self._buttons[panel_key]["geom"]
-        panel_w = max(240, int(round(260 * scale)))
+        if panel_key == "tests":
+            panel_w = max(340, int(round(380 * scale)))
+        else:
+            panel_w = max(240, int(round(260 * scale)))
         panel_x = bx + bw / 2 - panel_w / 2
         panel_y = by + bh + max(6, int(round(8 * scale)))
-        row_h = max(36, int(round(48 * scale))) if panel_key == "tests" else max(30, int(round(36 * scale)))
+        row_h = max(30, int(round(38 * scale))) if panel_key == "tests" else max(30, int(round(36 * scale)))
         padding_tb = max(8, int(round(12 * scale)))
         panel_h = padding_tb + row_h * row_count + padding_tb
         return panel_x, panel_y, panel_w, panel_h
@@ -872,8 +875,19 @@ class MenuScreen:
             self._draw_resolution_panel(x, y, w, full_h if visible_h is None else visible_h)
             return
 
-        x, y, w, full_h = self._panel_target_geometry("tests", 2)
+        test_rows = self._test_case_rows()
+        x, y, w, full_h = self._panel_target_geometry("tests", len(test_rows))
         self._draw_test_panel(x, y, w, full_h if visible_h is None else visible_h)
+
+    def _test_case_rows(self):
+        """Returns menu test case labels and keys."""
+        return [
+            ("Game #1 Start (52)", "1-start"),
+            ("Game #1 Mid-Game (44)", "1-mid"),
+            ("Game #1 Late (16)", "1-late16"),
+            ("Game #1 Late (12)", "1-late12"),
+            ("Game #1 Late (10)", "1-late10"),
+        ]
 
     def _draw_test_panel(self, x, y, w, visible_h):
         """Draws the test panel at the specified location and size."""
@@ -891,34 +905,52 @@ class MenuScreen:
         if visible_h <= 4:
             return
 
-        row_h = max(36, int(round(48 * scale)))
+        rows = self._test_case_rows()
         top_pad = max(8, int(round(12 * scale)))
+        available_h = max(1, visible_h - (2 * top_pad))
+        row_h = max(28, min(max(30, int(round(38 * scale))), int(available_h / max(1, len(rows)))))
         content_y0 = y + top_pad
 
-        def add_row(row_idx, label, test_number):
+        def fit_label(text, font_obj, max_width_px):
+            if font_obj.measure(text) <= max_width_px:
+                return text
+            suffix = "..."
+            for keep in range(len(text), 0, -1):
+                candidate = text[:keep].rstrip() + suffix
+                if font_obj.measure(candidate) <= max_width_px:
+                    return candidate
+            return suffix
+
+        def add_row(row_idx, label, case_key):
             row_top = content_y0 + row_idx * row_h
             if row_top + row_h > y + visible_h - 6:
                 return
 
+            label_font = tkfont.Font(family="Georgia", size=max(9, int(round(11 * scale))))
+            label_x = x + max(12, int(round(16 * scale)))
+
+            btn_w = max(74, int(round(80 * scale)))
+            btn_h = max(26, int(round(30 * scale)))
+            btn_x = x + w - max(12, int(round(16 * scale))) - btn_w
+            btn_y = row_top + (row_h - btn_h) / 2
+
+            max_label_w = max(40, int(btn_x - label_x - max(12, int(round(14 * scale)))))
+            fitted_label = fit_label(label, label_font, max_label_w)
+
             text_id = self.canvas.create_text(
-                x + max(12, int(round(16 * scale))),
+                label_x,
                 row_top + row_h / 2,
                 anchor="w",
-                text=label,
+                text=fitted_label,
                 fill="#a8d5b5",
-                font=("Georgia", max(10, int(round(12 * scale)))),
+                font=label_font,
                 tags=("menu", "menu_ui"),
             )
             self._test_panel_items.append(text_id)
             self._item_ids.append(text_id)
 
-            btn_w = max(74, int(round(80 * scale)))
-            btn_h = max(28, int(round(32 * scale)))
-            btn_x = x + w - max(12, int(round(16 * scale))) - btn_w
-            btn_y = row_top + (row_h - btn_h) / 2
-
             def do_load():
-                self._fade_out(lambda: self.on_load_test(test_number))
+                self._fade_out(lambda: self.on_load_test(case_key))
 
             btn_items = draw_menu_button(self.canvas, btn_x, btn_y, btn_w, btn_h, "Load", do_load)
             for item_id in btn_items.values():
@@ -926,8 +958,8 @@ class MenuScreen:
                 self._test_panel_items.append(item_id)
                 self._item_ids.append(item_id)
 
-        add_row(0, "Test Case 1 (13)", 1)
-        add_row(1, "Test Case 2 (20)", 2)
+        for idx, (label, case_key) in enumerate(rows):
+            add_row(idx, label, case_key)
 
     def _draw_resolution_panel(self, x, y, w, visible_h):
         """Draws a styled dropdown panel for resolution selection."""
@@ -1306,6 +1338,9 @@ class FreeCell_GUI:
         self.win_announced = False
         self.last_solution_moves = []
         self.last_solver_name = None
+        self.is_solving = False
+        self._solver_cancel_event = threading.Event()
+        self._active_solver_name = None
 
         self._init_drag_state()
         self._init_input_state()
@@ -1594,6 +1629,16 @@ class FreeCell_GUI:
         }
         for solver_btn in self.solver_buttons.values():
             solver_btn.pack(fill=tk.X, padx=10, pady=3)
+
+        self.stop_solver_btn = self._make_panel_btn(self.left_panel, "STOP SOLVER", self.stop_current_solver)
+        self.stop_solver_btn.configure(
+            state=tk.DISABLED,
+            bg="#220d0d",
+            fg="#ff6666",
+            activebackground="#3a1111",
+            activeforeground="#ff9999",
+        )
+        self.stop_solver_btn.pack(fill=tk.X, padx=10, pady=(6, 3))
 
         fp_frame = tk.Frame(self.left_panel, bg="#0d0f0d")
         fp_frame.pack(fill=tk.X, padx=10, pady=6)
@@ -3432,34 +3477,82 @@ class FreeCell_GUI:
         self.new_game()
         self.root.after_idle(self._sync_layout_after_menu_exit)
 
-    def _load_test_from_menu(self, test_number):
+    def _load_test_from_menu(self, test_case_key):
         if self._menu:
             self._menu.hide()
             self._menu = None
-        if test_number == 1: self._load_test_1()
-        elif test_number == 2: self._load_test_2()
-        else: self.new_game()
+
+        state = self._build_menu_test_state(str(test_case_key))
+        if state is None:
+            self.new_game()
+            self.status_var.set("Unknown test case key. Started a new game.")
+        else:
+            self._apply_loaded_test_state(state, test_case_key)
         self.root.after_idle(self._sync_layout_after_menu_exit)
 
-    def _load_test_1(self):
+    def _build_menu_test_state(self, case_key):
+        if case_key == "1-start":
+            return FreeCell.create_initial_state(deal_number=1)
+
+        if case_key == "1-mid":
+            base = FreeCell.create_initial_state(deal_number=1)
+            cascades = []
+            for cascade in base.cascades:
+                cascades.append([card for card in cascade if card.rank > 2])
+            foundations = {'S': 2, 'C': 2, 'H': 2, 'D': 2}
+            return GameState(cascades=cascades, free_cells=[None, None, None, None], foundations=foundations)
+
+        if case_key == "1-late16":
+            foundations = {'C': 9, 'D': 9, 'S': 9, 'H': 9}
+            cascades = [
+                [Card(10, 'S'), Card(11, 'H'), Card(12, 'S'), Card(13, 'H')],
+                [Card(10, 'D'), Card(11, 'S'), Card(12, 'D'), Card(13, 'S')],
+                [Card(10, 'C'), Card(11, 'D'), Card(12, 'C'), Card(13, 'D')],
+                [Card(10, 'H'), Card(11, 'C'), Card(12, 'H'), Card(13, 'C')],
+                [],
+                [],
+                [],
+                [],
+            ]
+            return GameState(cascades=cascades, free_cells=[None, None, None, None], foundations=foundations)
+
+        if case_key == "1-late12":
+            foundations = {'C': 10, 'D': 10, 'S': 10, 'H': 10}
+            cascades = [
+                [Card(11, 'S'), Card(12, 'H'), Card(13, 'S')],
+                [Card(11, 'D'), Card(12, 'S'), Card(13, 'D')],
+                [Card(11, 'C'), Card(12, 'D'), Card(13, 'C')],
+                [Card(11, 'H'), Card(12, 'C'), Card(13, 'H')],
+                [],
+                [],
+                [],
+                [],
+            ]
+            return GameState(cascades=cascades, free_cells=[None, None, None, None], foundations=foundations)
+
+        if case_key == "1-late10":
+            # Layout provided as "10 cards" includes 8 cascade cards; keep provided foundation ranks.
+            foundations = {'C': 11, 'D': 11, 'S': 11, 'H': 11}
+            cascades = [
+                [Card(12, 'S'), Card(13, 'H')],
+                [Card(12, 'D'), Card(13, 'S')],
+                [Card(12, 'C'), Card(13, 'D')],
+                [Card(12, 'H'), Card(13, 'C')],
+                [],
+                [],
+                [],
+                [],
+            ]
+            return GameState(cascades=cascades, free_cells=[None, None, None, None], foundations=foundations)
+
+        return None
+
+    def _apply_loaded_test_state(self, state, case_key):
         self._cancel_ai_playback()
         self._dismiss_win()
         self.canvas.delete("solver_popup")
 
-        foundations = {'S': 9, 'C': 10, 'H': 10, 'D': 10}
-        cascades = [
-            [Card(10, 'S'), Card(12, 'H')],
-            [Card(11, 'C'), Card(13, 'D')],
-            [Card(11, 'H'), Card(13, 'S')],
-            [Card(11, 'D'), Card(13, 'C')],
-            [Card(11, 'S'), Card(13, 'H')],
-            [Card(12, 'C')],
-            [Card(12, 'D')],
-            [Card(12, 'S')],
-        ]
-        free_cells = [None, None, None, None]
-
-        self.state = GameState(cascades=cascades, free_cells=free_cells, foundations=foundations)
+        self.state = state
         self.initial_state = self.state.copy()
         self.current_deal_number = None
         self._update_deal_code_label()
@@ -3469,39 +3562,7 @@ class FreeCell_GUI:
         self.win_announced = False
         self._move_count = 0
         self._game_start_time = time.time()
-        self.status_var.set("Loaded Test Case 1.")
-        self.render()
-        self._setup_canvas_hud()
-
-    def _load_test_2(self):
-        self._cancel_ai_playback()
-        self._dismiss_win()
-        self.canvas.delete("solver_popup")
-
-        foundations = {'H': 13, 'C': 13, 'S': 6, 'D': 0}
-        cascades = [
-            [Card(7, 'S'), Card(8, 'S'), Card(9, 'S')],
-            [Card(10, 'S'), Card(11, 'S'), Card(12, 'S')],
-            [Card(13, 'S'), Card(1, 'D'), Card(2, 'D')],
-            [Card(3, 'D'), Card(4, 'D'), Card(5, 'D')],
-            [Card(6, 'D'), Card(7, 'D')],
-            [Card(8, 'D'), Card(9, 'D')],
-            [Card(10, 'D'), Card(11, 'D')],
-            [Card(12, 'D'), Card(13, 'D')],
-        ]
-        free_cells = [None, None, None, None]
-
-        self.state = GameState(cascades=cascades, free_cells=free_cells, foundations=foundations)
-        self.initial_state = self.state.copy()
-        self.current_deal_number = None
-        self._update_deal_code_label()
-        self.deal_var.set("")
-        self.selection = None
-        self.history = []
-        self.win_announced = False
-        self._move_count = 0
-        self._game_start_time = time.time()
-        self.status_var.set("Loaded Test Case 2.")
+        self.status_var.set(f"Loaded Test Case {case_key}.")
         self.render()
         self._setup_canvas_hud()
 
@@ -4082,60 +4143,61 @@ class FreeCell_GUI:
         self.canvas.tag_raise("solver_popup")
 
     def solve_with_bfs(self):
-        if getattr(self, "is_solving", False): return
-        self.is_solving = True
-        self._highlight_solver("BFS")
-        self._set_ai_solving_status("BFS", sum(self.state.foundations.values()))
-        
-        def worker():
-            try:
-                from solvers.bfs_solver import BFSSolver
-                solver = BFSSolver(debug=True, debug_every=100000)
-                path, metrics = solver.solve(self.state, progress_callback=self._make_ai_progress_callback("BFS"), foundation_priority_mode=self.foundation_priority_var.get())
-                self.root.after(0, lambda: self._on_solver_complete("BFS", path, metrics))
-            except NotImplementedError: self.root.after(0, lambda: self._on_solver_not_implemented("BFS"))
-        threading.Thread(target=worker, daemon=True).start()
+        from solvers.bfs_solver import BFSSolver
+
+        self._start_solver_thread("BFS", lambda: BFSSolver(debug=True, debug_every=100000))
 
     def solve_with_dfs(self):
-        if getattr(self, "is_solving", False): return
-        self.is_solving = True
-        self._highlight_solver("DFS")
-        self._set_ai_solving_status("DFS", sum(self.state.foundations.values()))
-        
-        def worker():
-            try:
-                from solvers.dfs_solver import DFSSolver
-                solver = DFSSolver(debug=True, debug_every=100000)
-                path, metrics = solver.solve(self.state, progress_callback=self._make_ai_progress_callback("DFS"), foundation_priority_mode=self.foundation_priority_var.get())
-                self.root.after(0, lambda: self._on_solver_complete("DFS", path, metrics))
-            except NotImplementedError: self.root.after(0, lambda: self._on_solver_not_implemented("DFS"))
-        threading.Thread(target=worker, daemon=True).start()
+        from solvers.dfs_solver import DFSSolver
+
+        self._start_solver_thread("DFS", lambda: DFSSolver(debug=True, debug_every=100000))
 
     def solve_with_astar(self):
-        if getattr(self, "is_solving", False): return
-        self.is_solving = True
-        self._highlight_solver("A*")
-        self._set_ai_solving_status("A*", sum(self.state.foundations.values()))
-        
-        def worker():
-            from solvers.astar_solver import AStarSolver
-            solver = AStarSolver(debug=True, debug_every=1000)
-            path, metrics = solver.solve(self.state, progress_callback=self._make_ai_progress_callback("A*"), foundation_priority_mode=self.foundation_priority_var.get())
-            self.root.after(0, lambda: self._on_solver_complete("A*", path, metrics))
-        threading.Thread(target=worker, daemon=True).start()
+        from solvers.astar_solver import AStarSolver
+
+        self._start_solver_thread("A*", lambda: AStarSolver(debug=True, debug_every=1000))
 
     def solve_with_ucs(self):
-        if getattr(self, "is_solving", False): return
+        from solvers.ucs_solver import UCSSolver
+
+        self._start_solver_thread("UCS", lambda: UCSSolver(debug=True, debug_every=100000))
+
+    def _start_solver_thread(self, name, solver_builder):
+        if getattr(self, "is_solving", False):
+            return
+
         self.is_solving = True
-        self._highlight_solver("UCS")
-        self._set_ai_solving_status("UCS", sum(self.state.foundations.values()))
-        
+        self._active_solver_name = name
+        self._solver_cancel_event.clear()
+        self._highlight_solver(name)
+        self._set_ai_solving_status(name, sum(self.state.foundations.values()))
+        if hasattr(self, "stop_solver_btn") and self.stop_solver_btn is not None:
+            self.stop_solver_btn.configure(state=tk.NORMAL)
+
         def worker():
-            from solvers.ucs_solver import UCSSolver
-            solver = UCSSolver(debug=True, debug_every=100000)
-            path, metrics = solver.solve(self.state, progress_callback=self._make_ai_progress_callback("UCS"), foundation_priority_mode=self.foundation_priority_var.get())
-            self.root.after(0, lambda: self._on_solver_complete("UCS", path, metrics))
+            try:
+                solver = solver_builder()
+                path, metrics = solver.solve(
+                    self.state,
+                    progress_callback=self._make_ai_progress_callback(name),
+                    foundation_priority_mode=self.foundation_priority_var.get(),
+                    should_stop=self._solver_cancel_event.is_set,
+                )
+                self.root.after(0, lambda: self._on_solver_complete(name, path, metrics))
+            except NotImplementedError:
+                self.root.after(0, lambda: self._on_solver_not_implemented(name))
+
         threading.Thread(target=worker, daemon=True).start()
+
+    def stop_current_solver(self):
+        if not getattr(self, "is_solving", False):
+            self.status_var.set("No solver is currently running.")
+            return
+        self._solver_cancel_event.set()
+        active = self._active_solver_name or "Solver"
+        self.status_var.set(f"Stopping {active}... Please wait.")
+        if hasattr(self, "stop_solver_btn") and self.stop_solver_btn is not None:
+            self.stop_solver_btn.configure(state=tk.DISABLED)
 
     def show_hint(self):
         successors = FreeCell.get_successors(self.state)
@@ -4457,22 +4519,33 @@ class FreeCell_GUI:
 
     def _on_solver_not_implemented(self, name):
         self.is_solving = False
+        self._active_solver_name = None
         self._reset_solver_highlight()
+        if hasattr(self, "stop_solver_btn") and self.stop_solver_btn is not None:
+            self.stop_solver_btn.configure(state=tk.DISABLED)
         self.status_var.set(f"{name} is not implemented yet.")
 
     def _on_solver_complete(self, name, path, metrics):
         self.is_solving = False
+        self._active_solver_name = None
         self._reset_solver_highlight()
+        if hasattr(self, "stop_solver_btn") and self.stop_solver_btn is not None:
+            self.stop_solver_btn.configure(state=tk.DISABLED)
         self._cancel_ai_playback()
         nodes = metrics.get('expanded_nodes', metrics.get('nodes_explored', 0))
+        termination = metrics.get('terminated_by') if isinstance(metrics, dict) else None
+        elapsed = metrics.get('time_taken', 0.0) if isinstance(metrics, dict) else 0.0
+
+        if termination == 'cancelled':
+            self.status_var.set(f"{name} stopped by user ({elapsed:.2f}s, {nodes} nodes).")
+            return
+
         if path is not None:
             self.last_solution_moves = list(path)
             self.last_solver_name = name
-            elapsed = metrics.get('time_taken', 0.0)
             self.status_var.set(f"{name} solved in {len(path)} moves ({elapsed:.2f}s).")
             self.show_solver_stats_popup(name, len(path), elapsed, nodes)
         else:
-            elapsed = metrics.get('time_taken', 0.0)
             self.status_var.set(f"{name} did not find a solution.")
             self.show_no_solution_popup(name, nodes, elapsed)
 

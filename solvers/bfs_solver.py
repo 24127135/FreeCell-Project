@@ -17,7 +17,13 @@ class BFSSolver:
         if self.debug:
             print(f"[BFS] {message}")
 
-    def solve(self, initial_state, progress_callback=None, foundation_priority_mode=False):
+    def solve(
+        self,
+        initial_state,
+        progress_callback=None,
+        foundation_priority_mode=False,
+        should_stop=None,
+    ):
         """Solve FreeCell using BFS graph search."""
         from game.freecell import FreeCell
 
@@ -43,6 +49,21 @@ class BFSSolver:
         self._debug_log("start")
 
         while frontier:
+            if should_stop is not None and should_stop():
+                elapsed = time.time() - start_time
+                self._debug_log(
+                    f"stopped_by_cancel expanded={expanded_nodes} generated={generated_nodes} "
+                    f"frontier_peak={frontier_peak} time={elapsed:.3f}s"
+                )
+                return None, {
+                    "expanded_nodes": expanded_nodes,
+                    "time_taken": elapsed,
+                    "generated_nodes": generated_nodes,
+                    "frontier_peak": frontier_peak,
+                    "terminated_by": "cancelled",
+                    "best_foundation_progress": best_foundation_progress,
+                }
+
             if self.max_time_seconds is not None:
                 elapsed = time.time() - start_time
                 if elapsed >= self.max_time_seconds:

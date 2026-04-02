@@ -3,23 +3,38 @@
 import heapq
 import time
 
+from .action_costs import get_action_cost
 from utils.heuristics import calculate_h_da
 
 
 class AStarSolver:
     """A* solver for FreeCell."""
 
-    def __init__(self, heuristic_func=calculate_h_da, weight=2, debug=False, debug_every=10000):
+    def __init__(
+        self,
+        heuristic_func=calculate_h_da,
+        weight=1,
+        debug=False,
+        debug_every=10000,
+        max_time_seconds=None,
+    ):
         self.heuristic = heuristic_func
         self.weight = weight
         self.debug = debug
         self.debug_every = max(1, int(debug_every))
+        self.max_time_seconds = max_time_seconds
 
     def _debug_log(self, message):
         if self.debug:
             print(f"[A*] {message}")
 
-    def solve(self, initial_state, progress_callback=None, foundation_priority_mode=False):
+    def solve(
+        self,
+        initial_state,
+        progress_callback=None,
+        foundation_priority_mode=False,
+        should_stop=None,
+    ):
         from game.freecell import FreeCell
 
         start_time = time.time()
@@ -61,6 +76,38 @@ class AStarSolver:
         self._debug_log(f"start weight={self.weight} h0={h_cost} f0={f_cost:.2f}")
 
         while frontier:
+            if should_stop is not None and should_stop():
+                elapsed = time.time() - start_time
+                self._debug_log(
+                    f"stopped_by_cancel expanded={expanded_nodes} generated={generated_nodes} "
+                    f"stale={stale_pops} frontier_peak={frontier_peak} time={elapsed:.3f}s"
+                )
+                return None, {
+                    "expanded_nodes": expanded_nodes,
+                    "time_taken": elapsed,
+                    "generated_nodes": generated_nodes,
+                    "frontier_peak": frontier_peak,
+                    "stale_pops": stale_pops,
+                    "best_foundation_progress": best_foundation_progress,
+                    "terminated_by": "cancelled",
+                }
+
+            if self.max_time_seconds is not None and (time.time() - start_time) >= self.max_time_seconds:
+                elapsed = time.time() - start_time
+                self._debug_log(
+                    f"stopped_by_time_limit expanded={expanded_nodes} generated={generated_nodes} "
+                    f"stale={stale_pops} frontier_peak={frontier_peak} time={elapsed:.3f}s"
+                )
+                return None, {
+                    "expanded_nodes": expanded_nodes,
+                    "time_taken": elapsed,
+                    "generated_nodes": generated_nodes,
+                    "frontier_peak": frontier_peak,
+                    "stale_pops": stale_pops,
+                    "best_foundation_progress": best_foundation_progress,
+                    "terminated_by": "time_limit",
+                }
+
             f, _, g, current_state = heapq.heappop(frontier)
 
             if g > best_g.get(current_state, float("inf")):
@@ -119,7 +166,7 @@ class AStarSolver:
             )
 
             for next_state, move in targets:
-                new_g = g + 1
+                new_g = g + get_action_cost(current_state, move)
                 if next_state not in best_g or new_g < best_g[next_state]:
                     best_g[next_state] = new_g
                     new_h = h(next_state)

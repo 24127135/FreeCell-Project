@@ -1,10 +1,19 @@
 """Heuristic functions for FreeCell search algorithms."""
 
 
+def _remaining_foundation_cost(state):
+    """Return a lower bound on the remaining rank-based foundation cost."""
+    remaining_cost = 0
+    for top_rank in state.foundations.values():
+        for rank in range(top_rank + 1, 14):
+            remaining_cost += rank
+    return remaining_cost
+
+
 def calculate_h_da(state):
     """
     Deadlock-aware heuristic:
-    h(n) = h0 (cards not yet in foundation) + me (one-suit deadlock penalties).
+    h(n) = h0 (remaining rank-based foundation cost) + me (one-suit deadlock penalties).
 
     Args:
         state (GameState): Current board state
@@ -12,8 +21,8 @@ def calculate_h_da(state):
     Returns:
         int: Estimated remaining cost
     """
-    # h0: Number of cards not yet moved to foundations.
-    h0 = 52 - sum(state.foundations.values())
+    # h0: Lower bound on the remaining action cost to finish the foundations.
+    h0 = _remaining_foundation_cost(state)
 
     # me: One-suit deadlock penalties.
     # O(n) per cascade by scanning top->bottom and tracking max seen rank per suit.
@@ -31,8 +40,8 @@ def calculate_h_da(state):
 
 
 def calculate_h0_basic(state):
-    """Basic heuristic: cards not yet in foundations."""
-    return 52 - sum(state.foundations.values())
+    """Basic heuristic: remaining rank-based foundation cost."""
+    return _remaining_foundation_cost(state)
 
 
 def create_heuristic_function():

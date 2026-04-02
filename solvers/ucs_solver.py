@@ -1,17 +1,26 @@
 import heapq
 import time
 
+from .action_costs import get_action_cost
+
 
 class UCSSolver:
-    def __init__(self, debug=False, debug_every=1000):
+    def __init__(self, debug=False, debug_every=1000, max_time_seconds=None):
         self.debug = debug
         self.debug_every = max(1, int(debug_every))
+        self.max_time_seconds = max_time_seconds
 
     def _debug_log(self, message):
         if self.debug:
             print(f"[UCS] {message}")
 
-    def solve(self, initial_state, progress_callback=None, foundation_priority_mode=False):
+    def solve(
+        self,
+        initial_state,
+        progress_callback=None,
+        foundation_priority_mode=False,
+        should_stop=None,
+    ):
         from game.freecell import FreeCell
 
         start_time = time.time()
@@ -40,6 +49,38 @@ class UCSSolver:
         self._debug_log("start")
 
         while frontier:
+            if should_stop is not None and should_stop():
+                elapsed = time.time() - start_time
+                self._debug_log(
+                    f"stopped_by_cancel expanded={expanded_nodes} generated={generated_nodes} "
+                    f"stale={stale_pops} frontier_peak={frontier_peak} time={elapsed:.3f}s"
+                )
+                return None, {
+                    "expanded_nodes": expanded_nodes,
+                    "time_taken": elapsed,
+                    "generated_nodes": generated_nodes,
+                    "frontier_peak": frontier_peak,
+                    "stale_pops": stale_pops,
+                    "best_foundation_progress": best_foundation_progress,
+                    "terminated_by": "cancelled",
+                }
+
+            if self.max_time_seconds is not None and (time.time() - start_time) >= self.max_time_seconds:
+                elapsed = time.time() - start_time
+                self._debug_log(
+                    f"stopped_by_time_limit expanded={expanded_nodes} generated={generated_nodes} "
+                    f"stale={stale_pops} frontier_peak={frontier_peak} time={elapsed:.3f}s"
+                )
+                return None, {
+                    "expanded_nodes": expanded_nodes,
+                    "time_taken": elapsed,
+                    "generated_nodes": generated_nodes,
+                    "frontier_peak": frontier_peak,
+                    "stale_pops": stale_pops,
+                    "best_foundation_progress": best_foundation_progress,
+                    "terminated_by": "time_limit",
+                }
+
             cost, _, _, g, current_state = heapq.heappop(frontier)
 
             if g > best_g.get(current_state, float("inf")):
@@ -61,7 +102,9 @@ class UCSSolver:
             if self.debug and expanded_nodes % self.debug_every == 0:
                 self._debug_log(
                     f"expanded={expanded_nodes} frontier={len(frontier)} best_g={len(best_g)} "
-                    f"stale={stale_pops} g={g} cost={cost} foundation_progress={current_progress}"
+                    f"stale={stale_pops} g={g} cost={cost} "
+                    f"foundation_progress_current={current_progress} "
+                    f"foundation_progress_best={best_foundation_progress}"
                 )
 
             if current_state.is_goal_state():
@@ -94,7 +137,7 @@ class UCSSolver:
                 current_state,
                 foundation_only=foundation_priority_mode,
             ):
-                new_g = g + move.card.rank
+                new_g = g + get_action_cost(current_state, move)
 
                 if next_state not in best_g or new_g < best_g[next_state]:
                     best_g[next_state] = new_g

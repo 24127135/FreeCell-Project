@@ -3,8 +3,6 @@ FreeCell game rules and mechanics.
 Validates moves, generates deals, and generates successor states.
 """
 
-import random
-
 from .card import Card
 from .state import GameState
 
@@ -67,24 +65,43 @@ class FreeCell:
     MICROSOFT_CLASSIC_MAX_DEAL = 32000
 
     @staticmethod
-    def _microsoft_rand(seed):
-        """Return next MSVC rand seed and value using classic LCG parameters."""
-        next_seed = (214013 * seed + 2531011) & 0xFFFFFFFF
-        return next_seed, (next_seed >> 16) & 0x7FFF
+    def _microsoft_rand_gen(seed):
+        """Generate random sequence using MS LCG (canonical Microsoft FreeCell)."""
+        max_int32 = (1 << 31) - 1
+        seed = seed & max_int32
+        while True:
+            seed = (seed * 214013 + 2531011) & max_int32
+            yield seed >> 16
 
     @staticmethod
     def _create_microsoft_deck(deal_number):
-        """Create a Microsoft-compatible shuffled deck for a numbered deal."""
-        # Classic FreeCell uses suit-major order C, D, H, S then A..K.
-        deck = [Card(rank, suit) for suit in ["C", "D", "H", "S"] for rank in range(1, 14)]
-        seed = int(deal_number) & 0xFFFFFFFF
-
-        for i in range(len(deck) - 1, 0, -1):
-            seed, value = FreeCell._microsoft_rand(seed)
-            j = value % (i + 1)
-            deck[i], deck[j] = deck[j], deck[i]
-
-        return deck
+        """
+        Create a Microsoft-compatible shuffled deck for a numbered deal.
+        Uses canonical algorithm from Microsoft Entertainment Pack FreeCell (Solitaire Laboratory).
+        
+        Algorithm:
+        1. Create deck in Rank-Major CDHS order (AC, AD, AH, AS, 2C, 2D, 2H, 2S, ...)
+        2. Initialize indices as reversed: [51, 50, 49, ..., 1, 0]
+        3. Shuffle using Microsoft LCG: seed = (seed * 214013 + 2531011) & 0x7FFFFFFF
+        4. For each of 52 iterations: random_index = (seed >> 16) % (52 - i); swap
+        """
+        # Rank-Major CDHS order (canonical Microsoft standard)
+        deck = [Card(rank, suit) for rank in range(1, 14) for suit in ["C", "D", "H", "S"]]
+        
+        # Initialize indices reversed: [51, 50, 49, ..., 1, 0]
+        indices = list(range(51, -1, -1))
+        
+        # Shuffle using LCG
+        rng = FreeCell._microsoft_rand_gen(int(deal_number))
+        for i in range(52):
+            remaining = 52 - i
+            r = next(rng)
+            j = 51 - (r % remaining)
+            indices[i], indices[j] = indices[j], indices[i]
+        
+        # Create shuffled deck by reading through indices
+        shuffled_deck = [deck[indices[i]] for i in range(52)]
+        return shuffled_deck
 
     @staticmethod
     def create_initial_state(deal_number=None):
@@ -99,16 +116,16 @@ class FreeCell:
         Returns:
             GameState: Freshly dealt board
         """
-        deck = [Card(rank, suit) for suit in ["H", "D", "C", "S"] for rank in range(1, 14)]
         if deal_number is None:
-            random.shuffle(deck)
-        else:
-            deal_number = int(deal_number)
-            if 1 <= deal_number <= FreeCell.MICROSOFT_CLASSIC_MAX_DEAL:
-                deck = FreeCell._create_microsoft_deck(deal_number)
-            else:
-                rng = random.Random(deal_number)
-                rng.shuffle(deck)
+            deal_number = 1
+
+        deal_number = int(deal_number)
+        if not 1 <= deal_number <= FreeCell.MICROSOFT_CLASSIC_MAX_DEAL:
+            raise ValueError(
+                f"deal_number must be in the range 1..{FreeCell.MICROSOFT_CLASSIC_MAX_DEAL}"
+            )
+
+        deck = FreeCell._create_microsoft_deck(deal_number)
 
         cascades = [[] for _ in range(8)]
         # Deal cards left-to-right in rounds, as in classic FreeCell.
@@ -528,8 +545,8 @@ class FreeCell:
         
         Args:
             state (GameState): Current game state
-            foundation_only (bool): If True, return only foundation moves when
-                at least one exists. If none exist, return full successors.
+            foundation_only (bool): If True, return only foundation moves.
+                If no foundation move exists, fall back to the full move set.
             
         Returns:
             list: List of (new_state, move) tuples

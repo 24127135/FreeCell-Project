@@ -24,7 +24,13 @@ class DFSSolver:
         if self.debug:
             print(f"[DFS] {message}")
 
-    def solve(self, initial_state, progress_callback=None, foundation_priority_mode=False):
+    def solve(
+        self,
+        initial_state,
+        progress_callback=None,
+        foundation_priority_mode=False,
+        should_stop=None,
+    ):
         """Solve FreeCell using depth-limited DFS graph search."""
         from game.freecell import FreeCell
 
@@ -51,6 +57,22 @@ class DFSSolver:
         self._debug_log(f"start max_depth={self.max_depth}")
 
         while stack:
+            if should_stop is not None and should_stop():
+                elapsed = time.time() - start_time
+                self._debug_log(
+                    f"stopped_by_cancel expanded={expanded_nodes} generated={generated_nodes} "
+                    f"frontier_peak={frontier_peak} pruned_depth={pruned_by_depth} time={elapsed:.3f}s"
+                )
+                return None, {
+                    "expanded_nodes": expanded_nodes,
+                    "time_taken": elapsed,
+                    "generated_nodes": generated_nodes,
+                    "frontier_peak": frontier_peak,
+                    "pruned_by_depth": pruned_by_depth,
+                    "terminated_by": "cancelled",
+                    "best_foundation_progress": best_foundation_progress,
+                }
+
             if self.max_time_seconds is not None:
                 elapsed = time.time() - start_time
                 if elapsed >= self.max_time_seconds:
