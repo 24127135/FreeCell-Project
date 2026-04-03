@@ -144,7 +144,7 @@ The search problem is defined as:
 - Goal predicate: $G(s)$ is true if all suit foundations are complete
 - Step cost: $c(s, a, s') = 1$
 
-For A*, the evaluation function is:
+For A*, the evaluation function is [2]:
 
 $$
 f(n) = g(n) + h(n)
@@ -176,7 +176,7 @@ functions in the game engine before any search expansion is accepted.
 
 ### Supermove Constraint
 
-Sequence cascade moves are bounded by the available empty free cells and cascades.
+Sequence cascade moves are bounded by the available empty free cells and cascades [7][8].
 For destination non-empty cascade, capacity is:
 
 $$
@@ -683,6 +683,9 @@ When foundation-priority is enabled, the successor ordering tends to move safe c
 4. Tkinter documentation. https://docs.python.org/3/library/tk.html
 5. Project brief: CSC14003 Project 1 (course handout).
 6. Cormen, T. H., et al. Introduction to Algorithms (for priority queue and complexity background).
+7. Rosetta Code. Deal cards for FreeCell. https://rosettacode.org/wiki/Deal_cards_for_FreeCell
+8. Solitaire Laboratory. FreeCell FAQ. http://www.solitairelaboratory.com/fcfaq.html
+9. Solitaire Laboratory. Microsoft Shuffle Algorithm. http://www.solitairelaboratory.com/mshuffle.txt
 
 ---
 

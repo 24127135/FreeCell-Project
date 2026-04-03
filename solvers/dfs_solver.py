@@ -12,7 +12,7 @@ class DFSSolver:
         debug_every=1000,
         max_depth=200,
         max_expansions=None,
-        max_time_seconds=None,
+        max_time_seconds=180,
     ):
         self.debug = debug
         self.debug_every = max(1, int(debug_every))
@@ -73,22 +73,21 @@ class DFSSolver:
                     "best_foundation_progress": best_foundation_progress,
                 }
 
-            if self.max_time_seconds is not None:
+            if self.max_time_seconds is not None and (time.time() - start_time) >= self.max_time_seconds:
                 elapsed = time.time() - start_time
-                if elapsed >= self.max_time_seconds:
-                    self._debug_log(
-                        f"stopped_by_time_limit expanded={expanded_nodes} generated={generated_nodes} "
-                        f"frontier_peak={frontier_peak} pruned_depth={pruned_by_depth} time={elapsed:.3f}s"
-                    )
-                    return None, {
-                        "expanded_nodes": expanded_nodes,
-                        "time_taken": elapsed,
-                        "generated_nodes": generated_nodes,
-                        "frontier_peak": frontier_peak,
-                        "pruned_by_depth": pruned_by_depth,
-                        "terminated_by": "time_limit",
-                        "best_foundation_progress": best_foundation_progress,
-                    }
+                self._debug_log(
+                    f"stopped_by_time_limit expanded={expanded_nodes} generated={generated_nodes} "
+                    f"frontier_peak={frontier_peak} pruned_depth={pruned_by_depth} time={elapsed:.3f}s"
+                )
+                return None, {
+                    "expanded_nodes": expanded_nodes,
+                    "time_taken": elapsed,
+                    "generated_nodes": generated_nodes,
+                    "frontier_peak": frontier_peak,
+                    "pruned_by_depth": pruned_by_depth,
+                    "terminated_by": "time_limit",
+                    "best_foundation_progress": best_foundation_progress,
+                }
 
             current_state, depth = stack.pop()
             expanded_nodes += 1

@@ -7,7 +7,13 @@ import time
 class BFSSolver:
     """BFS solver for FreeCell."""
 
-    def __init__(self, debug=True, debug_every=1000, max_expansions=None, max_time_seconds=None):
+    def __init__(
+        self,
+        debug=True,
+        debug_every=1000,
+        max_expansions=None,
+        max_time_seconds=180,
+    ):
         self.debug = debug
         self.debug_every = max(1, int(debug_every))
         self.max_expansions = max_expansions
@@ -64,21 +70,20 @@ class BFSSolver:
                     "best_foundation_progress": best_foundation_progress,
                 }
 
-            if self.max_time_seconds is not None:
+            if self.max_time_seconds is not None and (time.time() - start_time) >= self.max_time_seconds:
                 elapsed = time.time() - start_time
-                if elapsed >= self.max_time_seconds:
-                    self._debug_log(
-                        f"stopped_by_time_limit expanded={expanded_nodes} generated={generated_nodes} "
-                        f"frontier_peak={frontier_peak} time={elapsed:.3f}s"
-                    )
-                    return None, {
-                        "expanded_nodes": expanded_nodes,
-                        "time_taken": elapsed,
-                        "generated_nodes": generated_nodes,
-                        "frontier_peak": frontier_peak,
-                        "terminated_by": "time_limit",
-                        "best_foundation_progress": best_foundation_progress,
-                    }
+                self._debug_log(
+                    f"stopped_by_time_limit expanded={expanded_nodes} generated={generated_nodes} "
+                    f"frontier_peak={frontier_peak} time={elapsed:.3f}s"
+                )
+                return None, {
+                    "expanded_nodes": expanded_nodes,
+                    "time_taken": elapsed,
+                    "generated_nodes": generated_nodes,
+                    "frontier_peak": frontier_peak,
+                    "terminated_by": "time_limit",
+                    "best_foundation_progress": best_foundation_progress,
+                }
 
             current_state = frontier.popleft()
             expanded_nodes += 1

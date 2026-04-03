@@ -62,8 +62,8 @@ def _state_game1_foundation_progress():
     base = FreeCell.create_initial_state(deal_number=1)
     cascades = []
     for cascade in base.cascades:
-        cascades.append([card for card in cascade if card.rank > 2])
-    foundations = {"S": 2, "C": 2, "H": 2, "D": 2}
+        cascades.append([card for card in cascade if card.rank > 6])
+    foundations = {"S": 6, "C": 6, "H": 6, "D": 6}
     return GameState(cascades=cascades, free_cells=[None] * 4, foundations=foundations)
 
 
@@ -145,7 +145,7 @@ SCENARIOS = {
         "state_builder": lambda: _state_from_deal(1),
     },
     "1-mid": {
-        "label": "Game #1 (Mid-Game: Foundation Progress)",
+        "label": "Game #1 (Mid-Game: 28 Cards Remaining)",
         "state_builder": _state_game1_foundation_progress,
     },
     "1-late16": {

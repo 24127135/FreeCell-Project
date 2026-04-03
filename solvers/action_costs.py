@@ -2,11 +2,11 @@
 
 # Cost table provided for search experiments.
 ACTION_COSTS = {
-    "MOVE_TO_FOUNDATION": 0.1,
+    "MOVE_TO_FOUNDATION": 0.8,
     "CASCADE_TO_CASCADE": 1.0,
-    "CASCADE_TO_FREECELL": 2.5,
-    "FREECELL_TO_CASCADE": 0.8,
-    "EMPTY_CASCADE_FILL": 1.5,
+    "CASCADE_TO_FREECELL": 1.2,
+    "FREECELL_TO_CASCADE": 0.9,
+    "EMPTY_CASCADE_FILL": 1.1,
 }
 
 

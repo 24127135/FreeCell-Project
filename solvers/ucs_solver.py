@@ -1,3 +1,5 @@
+"""Uniform-Cost Search solver implementation for FreeCell."""
+
 import heapq
 import time
 
@@ -5,7 +7,14 @@ from .action_costs import get_action_cost
 
 
 class UCSSolver:
-    def __init__(self, debug=False, debug_every=1000, max_time_seconds=None):
+    """UCS solver for FreeCell."""
+
+    def __init__(
+        self,
+        debug=False,
+        debug_every=1000,
+        max_time_seconds=180,
+    ):
         self.debug = debug
         self.debug_every = max(1, int(debug_every))
         self.max_time_seconds = max_time_seconds
@@ -21,6 +30,7 @@ class UCSSolver:
         foundation_priority_mode=False,
         should_stop=None,
     ):
+        """Solve FreeCell using UCS graph search."""
         from game.freecell import FreeCell
 
         start_time = time.time()

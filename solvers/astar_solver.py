@@ -13,10 +13,10 @@ class AStarSolver:
     def __init__(
         self,
         heuristic_func=calculate_h_da,
-        weight=1,
+        weight=2,
         debug=False,
         debug_every=10000,
-        max_time_seconds=None,
+        max_time_seconds=180,
     ):
         self.heuristic = heuristic_func
         self.weight = weight

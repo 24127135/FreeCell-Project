@@ -1,13 +1,13 @@
 """Heuristic functions for FreeCell search algorithms."""
 
 # Lấy chi phí tối thiểu từ action_costs.py để làm mốc đồng bộ
-MIN_FOUNDATION_COST = 0.1  # Chi phí để đưa 1 lá vào Foundation
-MIN_DEADLOCK_BREAK_COST = 0.8 # Chi phí di chuyển rẻ nhất để gỡ bài (FREECELL_TO_CASCADE)
+MIN_FOUNDATION_COST = 0.8  # Chi phí để đưa 1 lá vào Foundation
+MIN_DEADLOCK_BREAK_COST = 0.9 # Chi phí di chuyển rẻ nhất để gỡ bài (FREECELL_TO_CASCADE)
 
 def _remaining_foundation_cost(state):
     """
     Tính h0 dựa trên tổng số lá bài còn thiếu.
-    Mỗi lá bài thiếu cần ít nhất 1 hành động MOVE_TO_FOUNDATION (cost 0.1).
+    Mỗi lá bài thiếu cần ít nhất 1 hành động MOVE_TO_FOUNDATION (cost 0.8).
     """
     missing_cards_count = 0
     for top_rank in state.foundations.values():

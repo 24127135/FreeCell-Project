@@ -905,7 +905,7 @@ class MenuScreen:
         """Returns menu test case labels and keys."""
         return [
             ("Game #1 Start (52)", "1-start"),
-            ("Game #1 Mid-Game (44)", "1-mid"),
+            ("Game #1 Mid-Game (28)", "1-mid"),
             ("Game #1 Late (16)", "1-late16"),
             ("Game #1 Late (12)", "1-late12"),
             ("Game #1 Late (10)", "1-late10"),
@@ -3590,8 +3590,8 @@ class FreeCell_GUI:
             base = FreeCell.create_initial_state(deal_number=1)
             cascades = []
             for cascade in base.cascades:
-                cascades.append([card for card in cascade if card.rank > 2])
-            foundations = {'S': 2, 'C': 2, 'H': 2, 'D': 2}
+                cascades.append([card for card in cascade if card.rank > 6])
+            foundations = {'S': 6, 'C': 6, 'H': 6, 'D': 6}
             return GameState(cascades=cascades, free_cells=[None, None, None, None], foundations=foundations)
 
         if case_key == "1-late16":
